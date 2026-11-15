@@ -1,6 +1,6 @@
 # 前期系统架构详细设计 · 02 数据库设计
 
-> 上游：[01 领域模型](01-domain-model.md)（聚合与不变量）、[ADR-0001](../decisions/0001-postgresql-18.md)（PostgreSQL 18.7）、[ADR-0003](../decisions/0003-shop-level-isolation.md)（只有 `shop_id`）、[ADR-0004](../decisions/0004-scope-baseline.md)（单币种、东八区、暂不归档）。
+> 上游：[01 领域模型](01-domain-model.md)（聚合与不变量）、[ADR-0001](../decisions/0001-postgresql-18.md)（PostgreSQL 18.7）、[ADR-0003](../decisions/0003-shop-level-isolation.md)（只有 `shop_id`）、[ADR-0004](../decisions/0004-scope-baseline.md)（单币种、东八区、暂不归档）、[ADR-0005](../decisions/0005-no-shop-groups.md)（无门店组表）。
 > 本文给的是**设计定稿用的 schema 形状**。第 3 节 DDL 是依赖自洽、可在 PG 18.7 上直接执行的**核心表节选**（不含全部表、不含完整 `Down`）；真实迁移文件从 R1 起放 `migrations/`，由 goose 执行。
 
 ## 1. 全局约定
@@ -30,15 +30,13 @@
 
 | 模块 | 表 | 类别 | 说明 | 唯一性范围 |
 |---|---|---|---|---|
-| shop | `shops` | A | 门店主表，`id` 即 `shop_id` | `code` 全局唯一 |
-| shop | `shop_groups` | A | 店群标签 | `code` 全局唯一 |
-| shop | `shop_group_members` | C | 门店 ↔ 店群 | `(shop_group_id, shop_id)` |
+| shop | `shops` | A | 门店主表，`id` 即 `shop_id`；**不带分组 / 层级 / 标签列**（ADR-0005） | `code` 全局唯一 |
 | shop | `shop_settings` | B | 门店参数（营业日切点等）；基准时区全局固定，不按店配置 | `(shop_id, key)` |
 | identity | `users` | A | 账号 | `login` 全局唯一 |
 | identity | `roles` / `permissions` | A | 角色与权限点 | `code` 全局唯一 |
 | identity | `role_permissions` | C | 角色 ↔ 权限 | `(role_id, permission_id)` |
 | identity | `user_roles` | C | 用户 ↔ 角色 | `(user_id, role_id)` |
-| identity | **`user_shops`** | C | **用户 ↔ 可见门店集合**（授权的唯一来源） | `(user_id, shop_id)` |
+| identity | **`user_shops`** | C | **用户 ↔ 可见门店集合**（授权的唯一来源；不存在分组授权中间表） | `(user_id, shop_id)` |
 | identity | `refresh_tokens` | A | 刷新令牌（存哈希） | `token_hash` 全局唯一 |
 | identity | `audit_logs` | P | 追加写、不可改；与门店相关的事件带 `shop_id`，账号级事件为 `NULL`；属基础设施表，不参与业务隔离判定 | — |
 | catalog | `catalog_categories` | A | 目录分类 | `(parent_id, code)` |
@@ -65,7 +63,7 @@
 | platform | `dead_letters` | P | 投递失败终态 | `id` |
 | platform | `schema_migrations` | P | goose 版本记录 | `version` |
 
-> `user_shops` 含 `shop_id` 列，但它是**授权关系**（C 类），不是把业务数据挂到上层实体——ADR-0003 禁止的是 tenant/org/company 这类上层归属维度。
+> `user_shops` 含 `shop_id` 列，但它是**授权关系**（C 类），也是可见门店集合的唯一来源，不是把业务数据挂到上层实体——ADR-0003 禁止的是 tenant/org/company 这类上层归属维度。按 [ADR-0005](../decisions/0005-no-shop-groups.md)，schema 中**不存在** `shop_groups` / `shop_group_members` 之类的分组表，也不允许给 `shops` 加 `group_id` / `parent_id` / 标签列变相分组。
 
 ## 3. 核心 DDL（PG 18.7 语法示例）
 
@@ -299,14 +297,14 @@ CREATE TABLE daily_shop_summary (
 - **运行期数据仍要清理**（这不是业务归档）：`idempotency_keys` 过期键（24 h）、已投递且超期的 `outbox_events`、导出任务的临时文件；未投递事件永不删除。业务单据与流水**不参与**任何定期删除。
 - **监控与复审**：表/索引体积、大表 `Seq Scan` 比例、慢查询数、库体积是必配指标；容量阈值在 R1 压测后写入运维清单。达到阈值时**另立 ADR** 再评估分区或归档，不在代码里悄悄加保留窗口。
 - 汇总表 `daily_shop_summary` 是**派生数据**：允许从流水全量重算，重算结果必须与源一致；这是报表可信度的基础，与归档无关。
-- **不设范围外表**：不做离线收银与打印（ADR-0004），因此不存在本地待同步单据、补传队列、同步水位、打印任务/模板表；`export_jobs` 只服务于文件导出。
+- **不设范围外表**：不做离线收银与打印（ADR-0004），因此不存在本地待同步单据、补传队列、同步水位、打印任务/模板表；`export_jobs` 只服务于文件导出。不设门店组（ADR-0005），因此也不存在 `shop_groups` / `shop_group_members` 之类的分组表、成员关系表或 `shops` 上的分组 / 层级列。
 
 ## 8. 数据层测试
 
 | 层次 | 内容 |
 |---|---|
 | 迁移测试 | 在真实 PG 18.7 容器里跑 `up` → `down` → `up`，断言无残留对象 |
-| 约束测试 | 并发插入相同单号断言唯一约束生效；插入跨店明细断言复合外键拒绝 |
+| 约束测试 | 并发插入相同单号断言唯一约束生效；插入跨店明细断言复合外键拒绝；断言 schema 中不存在 `shop_group*` 表 / 列，`shops` 无分组或层级列（ADR-0005） |
 | 精度测试 | 大额与分摊场景断言 `numeric` 无舍入漂移；断言金额列不存在 `currency` 字段与浮点类型 |
 | 业务日测试 | 在 UTC+8 日界（UTC 16:00）前后各插入一条，断言归入正确的 `business_date`，且单号日期与之一致 |
 | 隔离测试 | 用两个门店、两个用户交叉请求，断言任一响应不含对方门店数据 |

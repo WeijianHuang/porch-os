@@ -1,6 +1,6 @@
 # 前期系统架构详细设计 · 01 领域模型
 
-> 上游：[00 总览](00-overview.md) 第 4–5 节（模块划分、数据归属三分法）、[ADR-0003](../decisions/0003-shop-level-isolation.md)、[ADR-0004](../decisions/0004-scope-baseline.md)（单币种、东八区、暂不归档、不打印、不离线）。
+> 上游：[00 总览](00-overview.md) 第 4–5 节（模块划分、数据归属三分法）、[ADR-0003](../decisions/0003-shop-level-isolation.md)、[ADR-0004](../decisions/0004-scope-baseline.md)（单币种、东八区、暂不归档、不打印、不离线）、[ADR-0005](../decisions/0005-no-shop-groups.md)（无门店组）。
 > 本文定义「业务上什么必须成立」，不定义表结构（见 [02](02-database-design.md)）与接口形状（见 [03](03-api-design.md)）。
 
 ## 1. 建模原则
@@ -16,7 +16,7 @@
 | 模块 | 聚合根 | 从属实体 / 值对象 | 归属类别 | 关键不变量 |
 |---|---|---|---|---|
 | `identity` | `User` | `Role`、`Permission`、`VisibleShops` | A 全局 + C 关系 | 用户至少属于一个角色；可见门店集合由关系推导，不缓存 |
-| `shop` | `Shop` | `ShopGroup`、`ShopSettings`、`BusinessDay` | A 全局 | `Shop.id` 即 `shop_id`；店群只是标签，不承载数据归属 |
+| `shop` | `Shop` | `ShopSettings`、`BusinessDay` | A 全局 | `Shop.id` 即 `shop_id`；不设 `ShopGroup`，门店之间无分组 / 层级关系（ADR-0005） |
 | `catalog` | `CatalogItem` | `Category`、`ShopCatalogOverride` | A 全局 + B 覆盖 | 目录全局唯一；价格/上下架按店覆盖，覆盖记录带 `shop_id` |
 | `member` | `Member` | `MemberBalance`、`BalanceLedger` | A 档案 + B 账 | 档案按手机号全局唯一；余额与流水按店独立 |
 | `order` | `Order` | `OrderLine`、`PriceAdjustment` | B | 单据与所有明细同属一个 `shop_id`；金额恒等于明细合计减调整 |
@@ -33,7 +33,7 @@
 |---|---|---|
 | `Member` 档案 | 同一个人在不同店应是同一个会员 | `member_balances`、`balance_ledger`、`member_visits` |
 | `CatalogItem` 目录 | 商品/服务统一维护，避免各店重复建档 | `shop_catalog_overrides`（价格、上下架）、`inventory_balances`、`stock_movements` |
-| `Shop` / `ShopGroup` | 门店本身是维度定义，不是被隔离的数据 | `shop_group_members`（关系）、门店设置 |
+| `Shop` | 门店本身是维度定义，不是被隔离的数据；门店之间无分组 / 层级关系（ADR-0005） | `shop_settings`、`user_shops`（授权关系） |
 | `User` / `Role` | 一套用户体系 | `user_shops`（授权关系）、`audit_logs` |
 
 **判定口诀**：改了它会不会产生「某家店的业务事实」？会 → 带 `shop_id`；不会 → 全局。会员改名是全局事实，会员在 A 店充值 100 元是门店事实。
@@ -102,7 +102,7 @@ draft ──► open ──► pending_payment ──► paid ──► complete
 | `public_id` | 时间有序 UUID（PG 18 内置 `uuidv7()`） | 对外暴露、可安全排序；降级到 PG 17 时由应用层生成（ADR-0002 联动条款） |
 | `order_no` | 人类可读单号 | **店内唯一**，日期部分按 UTC+8；序号由数据库序列保证，不靠应用层拼接日期与门店 ID |
 | `IdempotencyKey` | `{scope, key, request_hash}` | `scope` 含主体与门店；相同 key + 不同 hash → 冲突错误，不静默复用结果 |
-| `ShopScope` | 当前主体可见的门店 ID 集合 | 由认证主体推导，客户端传参只能做「集合内选择」，不能扩大集合 |
+| `ShopScope` | 当前主体可见的门店 ID 集合 | 由认证主体 + `user_shops` 推导，客户端传参只能做「集合内选择」，不能扩大集合；**是请求期推导结果，不对应任何持久化分组对象**（ADR-0005） |
 | `TimeRange` | 半开区间 `[start, end)` | 统一 UTC，避免 `BETWEEN` 的边界重复计数 |
 | `BusinessDay` | `(occurred_at AT TIME ZONE 'Asia/Shanghai')::date` 再按门店营业日切点偏移 | 全系统唯一口径；日报、班次、汇总、导出共用；基准时区固定 UTC+8，不接受客户端或门店时区参数（ADR-0004） |
 
@@ -146,7 +146,7 @@ Porch OS 只提供**通用多店经营底座**，不内置任何行业专属规�
 7. 全局实体（会员档案、目录项）不带 `shop_id`，其副作用数据一律带。
 8. 领域层不 import 适配器、平台包，也不直接执行 SQL。
 9. 金额路径不出现浮点类型；单币种 CNY 下不出现 `currency` 字段、汇率或币种一致性校验（OQ-01 已由 ADR-0004 关闭）。
-10. 任何跨店动作都显式声明，且发生在当前主体可见门店集合之内。
+10. 任何跨店动作都显式声明，且发生在当前主体可见门店集合之内；不存在门店组 / 分组对象，也不按组授权（ADR-0005）。
 11. 业务日与单号日期一律按 UTC+8 推导；`AT TIME ZONE` 必须显式写 `'Asia/Shanghai'`，不依赖会话默认时区。
 12. 所有写操作在线同步完成；不存在本地队列、离线单据或补传合并路径（ADR-0004）。
 

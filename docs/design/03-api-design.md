@@ -1,6 +1,6 @@
 # 前期系统架构详细设计 · 03 接口设计
 
-> 上游：[00 总览](00-overview.md) 第 3 节（系统上下文）、[01 领域模型](01-domain-model.md)（状态机与值对象）、[ADR-0003](../decisions/0003-shop-level-isolation.md)、[ADR-0004](../decisions/0004-scope-baseline.md)（单币种、东八区、不打印、不离线）。
+> 上游：[00 总览](00-overview.md) 第 3 节（系统上下文）、[01 领域模型](01-domain-model.md)（状态机与值对象）、[ADR-0003](../decisions/0003-shop-level-isolation.md)、[ADR-0004](../decisions/0004-scope-baseline.md)（单币种、东八区、不打印、不离线）、[ADR-0005](../decisions/0005-no-shop-groups.md)（无门店组端点）。
 > 本册是 `porch-console` 与第三方集成的对接依据。前端框架待定不影响本册：后端只保证 REST + OpenAPI。
 
 ## 1. 风格与版本
@@ -9,7 +9,7 @@
 |---|---|
 | 风格 | REST + JSON，OpenAPI 3.x 契约由注释生成（`swaggo/swag`） |
 | 前缀 | `/api/v1`；破坏性变更升 `/api/v2`，不在 v1 里悄悄改语义 |
-| 资源名 | 复数小写、连字符：`/catalog-items`、`/shop-groups` |
+| 资源名 | 复数小写、连字符：`/catalog-items`、`/payment-entries`；**不存在 `/shop-groups` 等分组资源**（ADR-0005） |
 | 对外 ID | 一律用 `public_id`（UUID）；内部 `bigint` 主键不出现在 URL 与响应中 |
 | 门店 | 门店维度放路径 `/shops/{shopId}/...`，**不是**查询参数裸传 |
 | 编码 | UTF-8；时间 ISO 8601 UTC（`2026-11-01T00:00:00Z`）传输；金额用**字符串** `"19.90"` |
@@ -22,7 +22,7 @@
 
 **时间怎么用**：UTC 只用于传输与存储，避免歧义；前端把 `Z` 时间统一按 UTC+8 渲染，后端按同一口径切分业务日、生成单号日期、汇总日报。前端**不得**用浏览器本地时区格式化业务时间，否则境外设备会看到错日期；也不要传 `tz` / `timezone` 参数，服务端一律忽略或报 `INVALID_ARGUMENT`。
 
-**明确不提供的能力**（ADR-0004）：打印端点、离线同步/补传端点、归档历史查询端点、币种与汇率端点、按店时区设置端点。文件导出端点保留，不属于打印。
+**明确不提供的能力**：打印端点、离线同步/补传端点、归档历史查询端点、币种与汇率端点、按店时区设置端点（ADR-0004）；门店组 / 店群端点、分组筛选参数、按组授权接口（ADR-0005）。文件导出端点保留，不属于打印；跨店汇总端点保留，只是范围由显式门店 ID 集合给出。
 
 ## 2. 统一响应形状
 
@@ -70,12 +70,12 @@
 | 未带 `X-Shop-Id` | 可见集合恰有 1 家 → 默认该店；多店且无跨店权限 → `400 SHOP_CONTEXT_REQUIRED` |
 | 带 `X-Shop-Id` | 与「当前主体可见门店集合」求交；命中 → 作为本次 shop scope；未命中 → `403 PERMISSION_DENIED` |
 | 路径里的 `{shopId}` | 同样做交集校验，不因出现在 URL 里就被信任 |
-| 跨店聚合 `scope=all` 或 `shop_ids=a,b` | 需 `report.cross_shop` 权限；请求列表**再与可见集合求交**，越权项直接拒绝而非静默忽略 |
+| 跨店聚合 `scope=all` 或 `shop_ids=a,b` | 需 `report.cross_shop` 权限；请求列表**再与可见集合求交**，越权项直接拒绝而非静默忽略；**不接受组 ID / 分组筛选参数**（ADR-0005） |
 | 跨店写操作 | 默认禁止；调拨、跨店核销等显式动作有专用端点与单独权限 |
 
 **防枚举**：门店不存在与无权访问统一返回 `403`，不区分二者；资源不存在返回 `404`，且只在先通过门店校验之后才查资源。任何「不存在的 ID 触发 500」都视为缺陷。
 
-`ShopScope` 由中间件从认证主体 + `user_shops` 推导并注入 context；用例层只读这个 scope，不重新解析请求参数。跨店权限判定结果**不缓存**（ADR-0002 阻断项 ⑧）。
+`ShopScope` 由中间件从认证主体 + `user_shops` 推导并注入 context；用例层只读这个 scope，不重新解析请求参数。跨店权限判定结果**不缓存**（ADR-0002 阻断项 ⑧）。`user_shops` 是可见门店集合的**唯一来源**，不存在分组对象，`scope=all` 也不是可持久化的实体（ADR-0005）。
 
 ## 4. 错误码与可重试语义（DP-04）
 
@@ -110,7 +110,7 @@
 | `sort` | 白名单枚举，如 `created_at_desc` / `created_at_asc`；非法值报 400，不拼接进 SQL |
 | 时间过滤 | `created_at_from` / `created_at_to`，半开区间 `[from, to)`，ISO 8601 UTC；按业务日筛选时用 `business_date_from` / `business_date_to`（日期按 UTC+8 口径） |
 | 状态过滤 | `status` 取状态机枚举值 |
-| 跨店 | `scope=all` + 可选 `shop_ids`，需跨店权限 |
+| 跨店 | `scope=all` + 可选 `shop_ids`，需跨店权限；**不提供按组筛选 / 组 ID 参数**（ADR-0005） |
 
 响应中 `page.has_more` 与 `next_cursor` 必须同时给出；`next_cursor` 不透明，客户端不得解析。导出场景复用同一过滤条件，但走异步任务 + 流式下载（第 8 节）。
 
@@ -151,8 +151,6 @@
 | identity | `GET /api/v1/me/permissions` | 当前权限点 |
 | shop | `GET / POST /api/v1/shops` | 门店列表 / 新建 |
 | shop | `GET / PATCH /api/v1/shops/{shopId}` | 门店详情 / 修改 |
-| shop | `GET /api/v1/shop-groups` | 店群列表 |
-| shop | `PUT /api/v1/shop-groups/{id}/shops` | 调整店群成员 |
 | shop | `GET / PATCH /api/v1/shops/{shopId}/settings` | 门店参数 |
 | catalog | `GET / POST /api/v1/catalog-items` | 目录列表 / 新建 |
 | catalog | `GET / PATCH /api/v1/catalog-items/{id}` | 目录项详情 / 修改 |
@@ -186,7 +184,7 @@
 | report | `GET /api/v1/shops/{shopId}/exports/{id}/download` | 流式下载 |
 | platform | `GET /health`、`GET /ready` | 存活 / 就绪（不经 `/api/v1`） |
 
-**范围排除清单**（ADR-0004，以下端点不存在，前端不要预留入口）：
+**范围排除清单**（ADR-0004 / ADR-0005，以下端点不存在，前端不要预留入口）：
 
 | 能力 | 状态 | 替代做法 |
 |---|---|---|
@@ -194,6 +192,7 @@
 | 离线单据提交、补传队列、同步水位 | 不提供 | 网络失败明确报错，恢复后由用户重新发起（复用幂等键） |
 | 归档数据查询、保留窗口配置 | 不提供 | 业务数据在线全量保留 |
 | 币种、汇率、按店时区设置 | 不提供 | 全局固定 CNY + UTC+8 |
+| `/shop-groups`、店群成员管理、按组筛选 / 按组授权 | 不提供（ADR-0005） | 跨店汇总用 `scope=all` 或 `shop_ids=a,b`，与可见门店集合求交 |
 
 ## 9. 超时、限流与契约冻结（DP-06）
 

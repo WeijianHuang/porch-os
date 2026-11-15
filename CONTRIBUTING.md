@@ -12,13 +12,14 @@
 
 1. Fork 后从 `main` 建分支，命名 `feat/xxx`、`fix/xxx`、`docs/xxx`。
 2. 本地配置：`cp .env.example .env`，填入本机值；`.env` 不提交。
-3. 提交信息遵循 [Conventional Commits](https://www.conventionalcommits.org/)：`feat: 支持店群汇总`、`fix: 跨店查询漏加 shop_id`。
+3. 提交信息遵循 [Conventional Commits](https://www.conventionalcommits.org/)：`feat: 支持跨店日报汇总`、`fix: 跨店查询漏加 shop_id`。
 4. 提交前自检：无 `.env`、无密钥、无真实经营数据、无备份文件被加入暂存区。
 5. 开 PR 并填写模板，关联对应 issue。
 
 ## 提交内容约定
 
 - **多店相关改动**：任何新增查询都必须明确 `shop_id` 维度；跨店查询要在 PR 描述里写明授权校验方式。禁止引入 `tenant_id` / `org_id` / `company_id` 等上层隔离维度（隔离模型的唯一权威见 [ADR-0003](docs/decisions/0003-shop-level-isolation.md)）。
+- **不要引入门店组**：不设 `ShopGroup` / 店群 / 父子门店 / 门店标签分组，也不要按组授权；跨店范围只用「可见门店集合 + 显式 `shop_ids`」（[ADR-0005](docs/decisions/0005-no-shop-groups.md)）。
 - **范围基线**：单币种 CNY、统一 UTC+8、暂不归档、不打印、不离线收银已由 [ADR-0004](docs/decisions/0004-scope-baseline.md) 锁定；不要引入币种/汇率、按店时区、保留窗口、打印设备或离线同步机制。需要扩大范围时先开 issue 并新建 ADR。
 - **数据库变更**：必须附带可回滚迁移，禁止只改代码不改 schema。
 - **接口变更**：同步更新文档与 `porch-console` 对应 issue，保持前后端契约一致。

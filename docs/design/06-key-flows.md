@@ -1,6 +1,6 @@
 # 前期系统架构详细设计 · 06 关键流程
 
-> 上游：[01 领域模型](01-domain-model.md)（状态机、不变量）、[02 数据库设计](02-database-design.md)（约束）、[03 接口设计](03-api-design.md)（错误码）、[05 横切机制](05-cross-cutting.md)（幂等、Outbox、报表读模型）、[ADR-0004](../decisions/0004-scope-baseline.md)（范围基线）。
+> 上游：[01 领域模型](01-domain-model.md)（状态机、不变量）、[02 数据库设计](02-database-design.md)（约束）、[03 接口设计](03-api-design.md)（错误码）、[05 横切机制](05-cross-cutting.md)（幂等、Outbox、报表读模型）、[ADR-0004](../decisions/0004-scope-baseline.md)（范围基线）、[ADR-0005](../decisions/0005-no-shop-groups.md)（跨店范围表达）。
 > 本册把前五册的约定串成端到端时序，是集成测试与用例评审的清单来源。
 
 ## 0. 所有流程的共同前提
@@ -10,6 +10,7 @@
 | 请求已通过中间件链，context 中有 `request_id`、认证主体、`ShopScope`、超时 deadline | [04 第 4 节](04-application-architecture.md) |
 | 所有写操作带 `Idempotency-Key`；业务写入 + 幂等记录 + Outbox 事件在同一事务提交 | [05 第 2、6 节](05-cross-cutting.md) |
 | 每条 SQL 显式带 `shop_id`；跨模块只通过用例层与 ID 协作 | [00 第 5 节](00-overview.md) |
+| 跨店范围由「可见门店集合 + 显式 `shop_ids`」表达；不存在门店组 / 分组对象，也不按组授权 | [ADR-0005](../decisions/0005-no-shop-groups.md) |
 | 状态迁移一律走 `CanTransition` 纯函数；金额计算一律是领域层纯函数 | [01 第 5、6 节](01-domain-model.md) |
 | 事务内不做外部 IO；通知、汇总、导出都在事务外由 worker 完成 | [04 第 5 节](04-application-architecture.md) |
 | 金额一律 CNY 且不带币种字段；业务日、单号日期按 UTC+8（`Asia/Shanghai`） | [ADR-0004](../decisions/0004-scope-baseline.md) |
@@ -123,7 +124,7 @@ paid ──► refunding ──► refunded（全额）
 
 **查询（L1 / L2）**
 
-1. 请求经 shop scope 校验；`scope=all` 额外校验 `report.cross_shop` 并把 `shop_ids` 与可见集合求交。
+1. 请求经 shop scope 校验；`scope=all` 额外校验 `report.cross_shop` 并把 `shop_ids` 与可见集合求交；**不接受组 ID / 分组筛选参数，也不按门店组聚合**（ADR-0005）。
 2. 当日 / 短区间 → L1 主库条件聚合（5 s 超时，命中 `(shop_id, created_at)`）。
 3. 历史 / 跨店对比 → L2 `daily_shop_summary`，响应带 `recomputed_at` 说明数据截至时间；业务日统一按 UTC+8。
 4. 复杂口径走 `derived/*.sql`（CTE / `FILTER`），不建视图；`EXPLAIN` 计划存档。业务数据暂不归档，查询范围不受保留窗口裁剪。

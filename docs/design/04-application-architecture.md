@@ -1,6 +1,6 @@
 # 前期系统架构详细设计 · 04 应用架构
 
-> 上游：[00 总览](00-overview.md) 第 4、6 节（模块与分层）、[ADR-0002](../decisions/0002-go-backend-stack.md)（技术栈与 9 条阻断项）、[ADR-0004](../decisions/0004-scope-baseline.md)（范围基线）。
+> 上游：[00 总览](00-overview.md) 第 4、6 节（模块与分层）、[ADR-0002](../decisions/0002-go-backend-stack.md)（技术栈与 9 条阻断项）、[ADR-0004](../decisions/0004-scope-baseline.md)（范围基线）、[ADR-0005](../decisions/0005-no-shop-groups.md)（无门店组）。
 > 本册把原则落成目录、依赖规则、事务边界与中间件链；横切机制见 [05](05-cross-cutting.md)，业务时序见 [06](06-key-flows.md)。
 
 ## 1. 目录结构
@@ -79,7 +79,7 @@ porch-os/
 | 3 | `timeout` | 普通 5 s / 报表 30 s，context 一路下传 | 让整个链路（含中间件）共享同一个截止时间 |
 | 4 | `ratelimit` | 按「主体 + 门店」限流 | 认证后才有稳定主体键；放在认证前只能按 IP |
 | 5 | `auth` | 校验 JWT、解析主体 | 后续权限与幂等作用域都依赖主体 |
-| 6 | `shopscope` | 从主体 + `user_shops` 推导可见门店集合，校验路径/头参数并注入 context | **必须在所有业务 handler 之前**；注入的是 shop scope，不是 tenant scope（ADR-0003） |
+| 6 | `shopscope` | 从主体 + `user_shops` 推导可见门店集合，校验路径/头参数并注入 context | **必须在所有业务 handler 之前**；注入的是 shop scope，不是 tenant scope（ADR-0003），也不解析任何分组 / 层级对象（ADR-0005） |
 | 7 | `idempotency` | 写操作校验 `Idempotency-Key`、请求指纹、落库判定 | 依赖主体与门店生成 `scope`，故在 6 之后；只读请求跳过 |
 | 8 | `handler` | 参数校验 → 调用例 → 格式化响应 | 业务规则不在此层 |
 
@@ -179,6 +179,7 @@ func (uc *Checkout) Pay(ctx context.Context, cmd PayCommand) (Result, error) {
 9. 报表是否走汇总表或 keyset 分页，而非大表全扫 / 深 `OFFSET`？业务日是否按 UTC+8 显式换算，而非依赖会话时区？
 10. 端点变更是否同步更新 [03 第 8 节](03-api-design.md) 与 `api/openapi.yaml`？
 11. 是否引入了范围外机制：本地离线队列、补传/同步水位、打印任务、业务数据归档或保留窗口（ADR-0004 一律禁止）？
+12. 是否引入了 `ShopGroup` / `shop_group_*` / 父子门店 / 门店标签分组或按组授权（ADR-0005 一律禁止）？跨店范围是否只用可见门店集合 + 显式 `shop_ids`？
 
 ---
 

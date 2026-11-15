@@ -4,6 +4,7 @@
 - 决策问题：R1 业务代码开工前，把 [`../design/00-overview.md`](../design/00-overview.md) 第 8 节中四项影响地基的开放问题（OQ-01 / OQ-02 / OQ-03 的打印部分 / OQ-06）定下来，避免默认假设被当成结论
 - 影响范围：schema、领域值对象、API 契约、前端展示、后台任务与部署配置；本文是这五项口径的**唯一权威定义**，[`../ARCHITECTURE.md`](../ARCHITECTURE.md) 与 `design/00`–`06` 与本文冲突时以本文为准
 - 上游：[ADR-0001](0001-postgresql-18.md)（PG 18.7）、[ADR-0002](0002-go-backend-stack.md)（SQL 优先）、[ADR-0003](0003-shop-level-isolation.md)（只有 `shop_id` 一层）
+- 同类范围收窄另见 [ADR-0005](0005-no-shop-groups.md)（取消门店组概念，跨店能力改用显式门店集合），该 ADR 同时修订了 ADR-0003 第 3 条
 
 ## 背景
 
