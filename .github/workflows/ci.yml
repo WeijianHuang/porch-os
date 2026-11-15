@@ -1,4 +1,4 @@
-name: skeleton-check
+name: ci
 
 on:
   push:
@@ -6,13 +6,38 @@ on:
   pull_request:
 
 jobs:
-  skeleton:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Format
+        run: |
+          files=$(git ls-files '*.go' | xargs -r gofmt -l)
+          if [ -n "$files" ]; then
+            echo "::error::以下文件未按 gofmt 格式化："
+            echo "$files"
+            exit 1
+          fi
+          echo "OK: gofmt clean"
+
+      - name: Test
+        run: go test ./... -race -count=1
+
+  hygiene:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # TODO: 技术栈确定后，把本 job 替换为真实的 lint / test / build。
-      # 在此之前先保证骨架完整，并阻止密钥与真实数据误入库。
       - name: Required files
         run: |
           test -f README.md
@@ -20,6 +45,7 @@ jobs:
           test -f .gitignore
           test -f .env.example
           test -f CONTRIBUTING.md
+          test -f go.mod
 
       - name: No secrets or real data committed
         run: |

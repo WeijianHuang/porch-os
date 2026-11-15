@@ -30,6 +30,12 @@ out/
 coverage/
 .cache/
 
+# Go 产物
+*.test
+*.out
+coverage.out
+/porch-os
+
 # 编辑器与操作系统
 .DS_Store
 .idea/
