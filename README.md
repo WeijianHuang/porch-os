@@ -4,7 +4,7 @@
 
 面向小微门店的开源经营系统后端：多门店统一管理、跨店会员与库存、按店出账与汇总报表。
 
-**状态：早期工程阶段。** 数据库已选定 **PostgreSQL 18.7**（[ADR-0001](docs/decisions/0001-postgresql-18.md)），后端技术栈已选定 **Go + SQL 优先**（[ADR-0002](docs/decisions/0002-go-backend-stack.md)）。`cmd/porch-os` 目前只提供零依赖的健康探针，作为 CI 的编译与测试基线；业务代码尚未开始。前端框架由 `porch-console` 独立决策，不阻塞后端。
+**状态：早期工程阶段。** 数据库已选定 **PostgreSQL 18.7**（[ADR-0001](docs/decisions/0001-postgresql-18.md)），后端技术栈已选定 **Go + SQL 优先**（[ADR-0002](docs/decisions/0002-go-backend-stack.md)），数据隔离模型已锁定为**仅门店层 `shop_id`、无租户层**（[ADR-0003](docs/decisions/0003-shop-level-isolation.md)）。`cmd/porch-os` 目前只提供零依赖的健康探针，作为 CI 的编译与测试基线；业务代码尚未开始。前端框架由 `porch-console` 独立决策，不阻塞后端。
 
 License: MIT · 语言：中文文档（发布前补英文版）
 
@@ -16,12 +16,13 @@ License: MIT · 语言：中文文档（发布前补英文版）
 
 一个人开一家店时，记账靠本子就够；开到第二家、第三家，数据就开始散落在不同的表格、账号和设备里。Porch OS 要解决的就是这一步：用一套系统管理任意数量的门店，让每笔单据、每件库存、每位会员都明确属于哪家店——单店能独立核算，店群能汇总对比，并且从数据层就防止把 A 店的数据读进 B 店的页面。
 
-它只做通用的经营底座：门店与店群、商品与服务、跨店会员、开单收银、报表与权限。项目刻意不预设任何行业规则，餐饮、零售、服务业的用法由使用方自行扩展。数据库与后端技术栈均已锁定，当前仓库先固定多店模型、工程约定、可复现的本地数据库环境与可编译的引导骨架；后续模块级决策继续以 ADR 逐条记录。
+它只做通用的经营底座：门店与店群、商品与服务、跨店会员、开单收银、报表与权限。项目刻意不预设任何行业规则，餐饮、零售、服务业的用法由使用方自行扩展。数据库、后端技术栈与「仅门店层」的隔离模型均已锁定，当前仓库先固定多店模型、工程约定、可复现的本地数据库环境与可编译的引导骨架；后续模块级决策继续以 ADR 逐条记录。
 
 **边界（不做什么）**
 
 - 不绑定具体业态，不内置行业专属规则
-- 不做 SaaS 多租户平台（这是单库多店，不是租户隔离）
+- **不引入租户 / 组织 / 公司等上层隔离维度**，只按 `shop_id` 隔离（[ADR-0003](docs/decisions/0003-shop-level-isolation.md)）
+- 不做 SaaS 多租户平台（所有门店同属一个经营主体，单库单 schema）
 - 不做加盟 / 连锁总部体系
 - 不替代财务软件、开票与报税系统
 - 现阶段不提供托管服务
@@ -30,15 +31,15 @@ License: MIT · 语言：中文文档（发布前补英文版）
 
 Porch OS is an open-source backend for small businesses running more than one shop. Every order, stock item and membership is tied to a specific shop, so each location can be accounted for on its own while a group of shops can still be rolled up and compared — with shop-level isolation enforced in the data layer, not left to the client.
 
-It provides only a shared foundation: shops and shop groups, catalog, members, checkout, reports and permissions. It assumes no particular industry. PostgreSQL 18.7 (ADR-0001) and a Go, SQL-first backend stack (ADR-0002) are locked; the repository currently provides the multi-shop model, engineering conventions, a reproducible local database and a compilable bootstrap. The frontend stack is decided separately in `porch-console`.
+It provides only a shared foundation: shops and shop groups, catalog, members, checkout, reports and permissions. It assumes no particular industry. PostgreSQL 18.7 (ADR-0001), a Go, SQL-first backend stack (ADR-0002) and a shop-only isolation model (ADR-0003) are locked: `shop_id` is the only isolation dimension, with no tenant layer. The repository currently provides the multi-shop model, engineering conventions, a reproducible local database and a compilable bootstrap. The frontend stack is decided separately in `porch-console`.
 
 ## 核心能力（规划）
 
 | 能力 | 说明 |
 |---|---|
 | 多门店 | 一个后台管理任意数量门店，所有业务数据带 `shop_id` 维度 |
-| 店群 | `ShopGroup` 把若干门店归为一组，支持按组汇总与授权 |
-| 跨店会员 | 会员档案归属组织，余额与消费记录可跨店核销 |
+| 店群 | `ShopGroup` 只是汇总与授权的分组标签，不是数据归属层 |
+| 跨店会员 | 会员档案全局唯一；余额、消费流水带 `shop_id`，跨店核销需显式授权 |
 | 商品与服务 | 目录统一维护，价格、库存、上下架可按店覆盖 |
 | 开单与收银 | 每笔单据绑定门店与操作人，写入幂等 |
 | 报表 | 单店明细、跨店汇总、按店对比；导出流式写出，不全量读进内存 |
@@ -48,10 +49,11 @@ It provides only a shared foundation: shops and shop groups, catalog, members, c
 
 - `Shop` = 单店；`ShopGroup` = 店群。不使用 `Chain` / `Franchise`（暗示加盟体系，对小门店过重）。
 - 所有业务表带 `shop_id`；默认查询必须带门店条件，跨店查询需显式声明。
-- 这是**单库多店**，不是 SaaS 多租户，因此不使用 `tenant_id`，避免误导架构。
-- 门店维度校验放在服务层统一入口，不依赖前端传参是否可信。
+- **数据隔离只有一层 `shop_id`**：单库、单 schema、一个经营主体；不存在 `tenant_id` / `org_id` / `company_id` 或 RLS 按会话变量过滤，见 [ADR-0003](docs/decisions/0003-shop-level-isolation.md)。
+- `ShopGroup` 只用于汇总与授权；一条业务记录始终只属于一个 `shop_id`。会员档案、商品目录等全局实体不带隔离维度，但其流水、余额、库存与单据必须带 `shop_id`。
+- 授权是「用户 ↔ 可见门店集合」的直接关系，不经过任何上层实体；门店维度校验放在服务层统一入口，不依赖前端传参是否可信。
 
-详见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
+详见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) 第 2.0 节。
 
 ## 设计原则
 
@@ -62,6 +64,7 @@ It provides only a shared foundation: shops and shop groups, catalog, members, c
 | 项目 | 状态 |
 |---|---|
 | 数据库 | **已定：PostgreSQL 18.7** — [ADR-0001](docs/decisions/0001-postgresql-18.md) |
+| 数据隔离模型 | **已定：仅门店层 `shop_id`，无租户层** — [ADR-0003](docs/decisions/0003-shop-level-isolation.md) |
 | 后端语言 / Web 框架 | **已定：Go 1.23+ / Gin v1.10** — [ADR-0002](docs/decisions/0002-go-backend-stack.md) |
 | 接口风格 | **已定：REST + OpenAPI**（`swaggo/swag`） |
 | 数据访问 | **已定：sqlc + squirrel + pgx/v5 + 自建 Unit of Work**；无实体关联图、无数据库视图 |
@@ -100,9 +103,9 @@ curl -s localhost:8080/health   # {"status":"ok"}
 .github/            CI 工作流（Go 构建/测试 + 仓库卫生）与 PR 模板
 cmd/porch-os/       R0 引导程序（/health）与单测
 docs/               架构原则、本地环境、决策记录
-  ARCHITECTURE.md   多店模型、隔离约束、分层与技术栈落地
+  ARCHITECTURE.md   隔离模型、分层、技术栈落地与稳健性原则
   LOCAL-DEV.md      本地 PostgreSQL 启动、验证与重置
-  decisions/        ADR：0001 数据库、0002 后端技术栈
+  decisions/        ADR：0001 数据库、0002 后端技术栈、0003 仅门店层隔离
 go.mod              Go 模块定义（当前零外部依赖）
 docker-compose.yml  本地数据库（PostgreSQL 18.7）
 .env.example        配置占位（仅示例值）
@@ -117,17 +120,18 @@ CHANGELOG.md        变更记录
 | 文档 | 看什么 |
 |---|---|
 | `README.md` | 定位、边界、能力规划、决策状态 |
-| `docs/ARCHITECTURE.md` | 多店模型、隔离约束、分层、技术栈落地与稳健性原则 |
+| `docs/ARCHITECTURE.md` | 隔离模型（2.0）、分层、技术栈落地与稳健性原则 |
 | `docs/LOCAL-DEV.md` | 本地数据库与引导程序的启动、验证与重置 |
 | `docs/decisions/0001-postgresql-18.md` | 为什么选 PG 18.7、代价与复审条件 |
 | `docs/decisions/0002-go-backend-stack.md` | 为什么选 Go + SQL 优先、评审阻断项与不选什么 |
+| `docs/decisions/0003-shop-level-isolation.md` | 为什么只有 `shop_id` 一层、禁止清单与复审条件 |
 | `CONTRIBUTING.md` | 分支、提交与 PR 约定 |
 | `CHANGELOG.md` | 变更记录 |
 
 ## 路线图
 
-- **R0** 工程约定、架构原则、社区文件、数据库与后端技术栈 ADR、可编译引导骨架与真实 CI（当前阶段）
-- **R1** 领域模型 + `shop_id` 隔离 + 单店 CRUD + 集成测试基线
+- **R0** 工程约定、架构原则、社区文件、数据库 / 后端技术栈 / 隔离模型 ADR、可编译引导骨架与真实 CI（当前阶段）
+- **R1** 领域模型 + `shop_id` 单层隔离 + 单店 CRUD + 集成测试基线
 - **R2** 多店汇总、店群授权、跨店会员
 - **R3** 开单收银、幂等与单号生成、报表流式导出
 - **R4** 实时能力、可观测性、生产加固清单

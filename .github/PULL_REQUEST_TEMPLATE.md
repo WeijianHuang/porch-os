@@ -17,7 +17,8 @@ Closes #
 
 - [ ] 新增查询都带 `shop_id` 维度，或已显式声明为跨店查询
 - [ ] 跨店查询有对应的授权校验，不信任前端传入的门店参数
-- [ ] 未引入 `tenant_id` / `Chain` / `Franchise` 等与本项目模型冲突的术语
+- [ ] 未引入 `tenant_id` / `org_id` / `company_id` / `Chain` / `Franchise` 等上层隔离维度或与本项目模型冲突的术语（见 ADR-0003）
+- [ ] `ShopGroup` 仅用于汇总与授权，未作为数据归属层；跨店共享实体的流水 / 余额 / 库存 / 单据仍带 `shop_id`
 
 ## 自测
 
