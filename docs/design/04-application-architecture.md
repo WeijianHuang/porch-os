@@ -1,6 +1,6 @@
 # 前期系统架构详细设计 · 04 应用架构
 
-> 上游：[00 总览](00-overview.md) 第 4、6 节（模块与分层）、[ADR-0002](../decisions/0002-go-backend-stack.md)（技术栈与 9 条阻断项）、[ADR-0004](../decisions/0004-scope-baseline.md)（范围基线）、[ADR-0005](../decisions/0005-no-shop-groups.md)（无门店组）、[ADR-0006](../decisions/0006-user-shops-and-current-shop.md)（shopscope 校验当前门店、无服务端切换端点）。
+> 上游：[00 总览](00-overview.md) 第 4、6 节（模块与分层）、[ADR-0002](../decisions/0002-go-backend-stack.md)（技术栈与 9 条阻断项）、[ADR-0004](../decisions/0004-scope-baseline.md)（范围基线）、[ADR-0005](../decisions/0005-no-shop-groups.md)（无门店组）、[ADR-0006](../decisions/0006-user-shops-and-current-shop.md)（shopscope 校验当前门店、无服务端切换端点）、[ADR-0007](../decisions/0007-remaining-open-questions.md)（R1 不接外部服务、支持编排平台、审计日志定时清理）。
 > 本册把原则落成目录、依赖规则、事务边界与中间件链；横切机制见 [05](05-cross-cutting.md)，业务时序见 [06](06-key-flows.md)。
 
 ## 1. 目录结构
@@ -34,7 +34,7 @@ porch-os/
 │   │   │   ├── derived/       #   复杂口径的普通 SQL（CTE / 条件聚合），不是视图
 │   │   │   └── repo/          #   实现 port 接口，返回扁平 DTO
 │   │   ├── redis/             #   R2 起：缓存 / 锁
-│   │   └── gateway/           #   外部系统适配器（OQ-03 待定；打印已明确排除，ADR-0004）
+│   │   └── gateway/           #   R1 不接外部服务，只留 port 接口位置（ADR-0007）；打印适配器明确排除（ADR-0004）
 │   ├── platform/
 │   │   ├── config/  log/  tx/  errors/  obs/  idgen/
 │   └── di/wire.go             #   编译期依赖注入
@@ -66,9 +66,11 @@ porch-os/
 | 进程 | 职责 | 不做 |
 |---|---|---|
 | `cmd/api` | 在线请求、WebSocket、健康检查、指标端点 | 不跑定时汇总、不跑长任务 |
-| `cmd/worker` | 日报预聚合、Outbox 派发、导出任务、运行期数据清理、定时任务 | 不监听 HTTP 业务端口（仅内部健康探针）；**不做业务数据归档**（ADR-0004） |
+| `cmd/worker` | 日报预聚合、Outbox 派发、导出任务、运行期数据清理（含 **`audit_logs` 30 天定时清理**，ADR-0007）、定时任务 | 不监听 HTTP 业务端口（仅内部健康探针）；**不做业务数据归档**（ADR-0004）；**不投递外部服务**（ADR-0007） |
 
 两者共用 `internal/` 与同一套迁移；数据库配置相同但连接池上限独立设置。请求处理器里**不允许**直接启动 goroutine 跑长任务：长任务一律落 `export_jobs` / Outbox，由 worker 领取。
+
+**编排平台部署约束（ADR-0007）**：`api` / `worker` 必须无状态、可水平扩缩（当前门店在客户端、权限每次请求实时推导，无需会话粘滞）；配置与密钥全部由环境变量 / 平台 Secret 注入；单主库读写，**暂不读写分离**；迁移由独立一次性任务执行，**任何进程启动时都不得跑迁移或隐式建表**；定时任务靠数据库 advisory lock 保证多副本下只跑一次；`max_conns` 按副本数推导。`/health` 用于存活、`/ready` 校验数据库连通与迁移版本，版本不符不接流量；优雅停机先摘流量再等在途任务收尾。本地 `docker-compose.yml` 只用于开发。
 
 ## 4. 中间件链（顺序有语义，不可随意调整）
 
@@ -146,10 +148,10 @@ func (uc *Checkout) Pay(ctx context.Context, cmd PayCommand) (Result, error) {
 ## 8. 配置、启动与依赖注入
 
 - `koanf` 从环境变量与 `.env` 合并配置；**启动时集中校验**，缺关键配置立即退出，不运行到一半才报错。
-- 必配：`DATABASE_URL`、`PORT`、JWT 签名密钥、日志级别、连接池上限、各类超时。密钥只存在本地环境，不进仓库（CI 的 hygiene job 拦截）。
-- 固定常量：`APP_TIMEZONE=Asia/Shanghai`、币种 `CNY`，启动时校验且**不允许按店或按请求覆盖**；业务日与单号日期的时间换算集中在 `internal/domain/`，SQL 中显式写 `AT TIME ZONE 'Asia/Shanghai'`（ADR-0004）。
+- 必配：`DATABASE_URL`、`PORT`、JWT 签名密钥、日志级别、连接池上限、各类超时、**`AUDIT_LOG_RETENTION_DAYS`（默认 30，启动时校验，ADR-0007）**。密钥只存在本地环境，不进仓库（CI 的 hygiene job 拦截）。
+- 固定常量：`APP_TIMEZONE=Asia/Shanghai`、币种 `CNY`，启动时校验且**不允许按店或按请求覆盖**；业务日与单号日期的时间换算集中在 `internal/domain/`，SQL 中显式写 `AT TIME ZONE 'Asia/Shanghai'`（ADR-0004）。审计保留天数同样全局生效，不通过 API 或按店覆盖（取值上限等细则见 [00 第 8.2 节 NQ-10](00-overview.md)）。
 - `wire` 编译期生成装配代码，无反射、无运行时容器；`cmd/api` 与 `cmd/worker` 各自有独立的装配入口。
-- 启动顺序：校验配置 → 连通数据库（`/ready`）→ 注册路由 → 监听；停机：摘流量 → 等待在途请求（有上限）→ 关闭连接池与 worker。
+- 启动顺序：校验配置 → 连通数据库并**校验迁移版本**（`/ready`）→ 注册路由 → 监听；**启动过程不执行迁移**（ADR-0007）。停机：摘流量 → 等待在途请求（有上限）→ 关闭连接池与 worker。
 - 连接池基线（对应架构评审里的超时治理）：`max_conns` 显式设置、`statement_timeout` 5 s（报表 30 s）、`idle_in_transaction_session_timeout` 10 s；禁止使用驱动默认值。
 
 ## 9. 测试分层
@@ -181,6 +183,8 @@ func (uc *Checkout) Pay(ctx context.Context, cmd PayCommand) (Result, error) {
 11. 是否引入了范围外机制：本地离线队列、补传/同步水位、打印任务、业务数据归档或保留窗口（ADR-0004 一律禁止）？
 12. 是否引入了 `ShopGroup` / `shop_group_*` / 父子门店 / 门店标签分组或按组授权（ADR-0005 一律禁止）？跨店范围是否只用可见门店集合 + 显式 `shop_ids`？
 13. 单店请求是否强制显式 `X-Shop-Id`、缺头即 `400` 且不隐式默认？是否未引入 `users.shop_id` / `shops.owner_user_id` / `current_shop` 表、切换端点，或把当前门店写进 JWT / 会话（ADR-0006）？缓存键是否含 `shop_id`，切换时是否处理在途请求？
+14. 是否引入了 R1 范围外的外部 SDK / 回调端点、只读副本与读写分离、内部往来账或自动清分（ADR-0007 一律禁止）？多副本假设下：启动时是否跑了迁移、定时任务是否加锁防重、连接池是否按副本数推导？
+15. 审计日志是否只对业务请求追加写、不可改删？唯一删除路径是否为 worker 的定时清理任务（按 30 天可配窗口、分批、可重入、有指标与告警、不写回审计表）？是否误把审计清理扩展成业务数据归档（ADR-0004 / 0007）？
 
 ---
 

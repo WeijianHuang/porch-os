@@ -1,6 +1,6 @@
 # 前期系统架构详细设计 · 01 领域模型
 
-> 上游：[00 总览](00-overview.md) 第 4–5 节（模块划分、数据归属三分法）、[ADR-0003](../decisions/0003-shop-level-isolation.md)、[ADR-0004](../decisions/0004-scope-baseline.md)（单币种、东八区、暂不归档、不打印、不离线）、[ADR-0005](../decisions/0005-no-shop-groups.md)（无门店组）、[ADR-0006](../decisions/0006-user-shops-and-current-shop.md)（一人多店与当前门店切换）。
+> 上游：[00 总览](00-overview.md) 第 4–5 节（模块划分、数据归属三分法）、[ADR-0003](../decisions/0003-shop-level-isolation.md)、[ADR-0004](../decisions/0004-scope-baseline.md)（单币种、东八区、暂不归档、不打印、不离线）、[ADR-0005](../decisions/0005-no-shop-groups.md)（无门店组）、[ADR-0006](../decisions/0006-user-shops-and-current-shop.md)（一人多店与当前门店切换）、[ADR-0007](../decisions/0007-remaining-open-questions.md)（不做跨店清分、审计日志保留 30 天）。
 > 本文定义「业务上什么必须成立」，不定义表结构（见 [02](02-database-design.md)）与接口形状（见 [03](03-api-design.md)）。
 
 ## 1. 建模原则
@@ -40,7 +40,9 @@
 
 **用户与门店**（ADR-0006）：从主体视角一个用户可管理 N 家门店，但关系实现是 `user_shops` **多对多**（同一家店也会有多个账号：经营者、店员、管理员），不是 `users.shop_id` 外键，也不在 `shops` 上记 owner。`User` 不「拥有」店里的单据、库存与余额，只持有对门店的授权关系；「当前正在看哪家店」是请求期的 `CurrentShop` 上下文，不是 `User` 的字段，也不产生新的持久化实体。
 
-跨店核销（会员在 A 店的余额于 B 店消费）是一次**显式业务动作**：分别在两家店各写一条流水，并记一条关联 ID，不修改会员档案的归属，也不提升任何查询权限。差额清分见 [00 总览 OQ-07](00-overview.md#8-开放问题需确认后才进入实现)。
+跨店核销（会员在 A 店的余额于 B 店消费）是一次**显式业务动作**：分别在两家店各写一条流水，并记一条关联 ID，不修改会员档案的归属，也不提升任何查询权限。**门店间差额不做自动清分**（OQ-07 已由 [ADR-0007](../decisions/0007-remaining-open-questions.md) 关闭）：不引入内部往来账、结算单或清分任务，差额只在按店分组的报表里呈现；将来需要清分时另立 ADR。
+
+**平台基础设施数据不计入 A/B/C 归属判定**：`audit_logs` 记录「谁、在哪个店、做了什么、什么结果」，是运行期数据而非业务数据。按 [ADR-0007](../decisions/0007-remaining-open-questions.md)，它**默认保留 30 天、可配置、由 worker 定时删除**；业务请求对其只追加、不可改删，唯一例外是清理任务。这与「业务数据暂不归档」（ADR-0004）不冲突——审计日志定时删除 ≠ 业务数据归档。
 
 ## 4. 核心聚合字段（概念层，非 DDL）
 

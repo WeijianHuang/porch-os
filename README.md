@@ -4,7 +4,7 @@
 
 面向小微门店的开源经营系统后端：多门店统一管理、跨店会员与库存、按店出账与汇总报表。
 
-**状态：早期工程阶段。** 数据库已选定 **PostgreSQL 18.7**（[ADR-0001](docs/decisions/0001-postgresql-18.md)），后端技术栈已选定 **Go + SQL 优先**（[ADR-0002](docs/decisions/0002-go-backend-stack.md)），数据隔离模型已锁定为**仅门店层 `shop_id`、无租户层**（[ADR-0003](docs/decisions/0003-shop-level-isolation.md)），业务范围基线已锁定为**单币种 CNY / 统一 UTC+8 / 暂不归档 / 不打印 / 不离线**（[ADR-0004](docs/decisions/0004-scope-baseline.md)），门店组概念已取消、跨店改用显式门店集合（[ADR-0005](docs/decisions/0005-no-shop-groups.md)），一个用户可拥有多间门店且当前门店可在页面切换（[ADR-0006](docs/decisions/0006-user-shops-and-current-shop.md)）。`cmd/porch-os` 目前只提供零依赖的健康探针，作为 CI 的编译与测试基线；业务代码尚未开始。**前期系统架构详细设计已启动**，见 [`docs/design/00-overview.md`](docs/design/00-overview.md)（设计提案，尚未冻结；含模块划分、schema、接口契约、关键流程、已确认决议与剩余开放问题）。前端框架由 `porch-console` 独立决策，不阻塞后端。
+**状态：早期工程阶段。** 数据库已选定 **PostgreSQL 18.7**（[ADR-0001](docs/decisions/0001-postgresql-18.md)），后端技术栈已选定 **Go + SQL 优先**（[ADR-0002](docs/decisions/0002-go-backend-stack.md)），数据隔离模型已锁定为**仅门店层 `shop_id`、无租户层**（[ADR-0003](docs/decisions/0003-shop-level-isolation.md)），业务范围基线已锁定为**单币种 CNY / 统一 UTC+8 / 暂不归档 / 不打印 / 不离线**（[ADR-0004](docs/decisions/0004-scope-baseline.md)），门店组概念已取消、跨店改用显式门店集合（[ADR-0005](docs/decisions/0005-no-shop-groups.md)），一个用户可拥有多间门店且当前门店可在页面切换（[ADR-0006](docs/decisions/0006-user-shops-and-current-shop.md)），**剩余开放问题已全部关闭**（[ADR-0007](docs/decisions/0007-remaining-open-questions.md)：R1 不接外部服务 / 前端框架归属 / 支持编排平台且暂不读写分离 / 不做跨店自动清分 / 审计日志保留 30 天可配并定时删除）。`cmd/porch-os` 目前只提供零依赖的健康探针，作为 CI 的编译与测试基线；业务代码尚未开始。**前期系统架构详细设计已启动**，见 [`docs/design/00-overview.md`](docs/design/00-overview.md)（设计提案，尚未冻结；OQ-01–08 已全部关闭，剩余为 7 项设计提案 DP-01–07 与 NQ 待确认清单）。前端框架由 `porch-console` 独立决策（决策权已确认，**具体框架仍未选定**），不阻塞后端。
 
 License: MIT · 语言：中文文档（发布前补英文版）
 
@@ -28,7 +28,10 @@ License: MIT · 语言：中文文档（发布前补英文版）
 - 不替代财务软件、开票与报税系统
 - 现阶段不提供托管服务
 - **不做多币种 / 多时区**：全系统只有人民币 `¥`，展示与业务日统一东八区（UTC+8）
-- **不做业务数据归档**：在线全量保留，不设保留窗口（仅清理幂等键、已投递事件等运行期数据）
+- **不做业务数据归档**：单据、支付与流水在线全量保留，不设保留窗口；运行期数据（幂等键、已投递事件、临时文件）照常清理。**审计日志是例外**：默认保留 30 天、可配置、由 worker 定时删除，不归档、不分区（[ADR-0007](docs/decisions/0007-remaining-open-questions.md)）
+- **R1 不接外部服务**：不引入支付 / 短信 / 对象存储 SDK 与回调端点，只留网关接口位置（[ADR-0007](docs/decisions/0007-remaining-open-questions.md)）
+- **暂不读写分离**：支持编排平台多副本，但所有读写走同一个主库，不引入只读副本（[ADR-0007](docs/decisions/0007-remaining-open-questions.md)）
+- **不做跨店自动清分**：只记录消费发生在哪家店，差额用按店分组的报表呈现（[ADR-0007](docs/decisions/0007-remaining-open-questions.md)）
 - **不支持打印**：无小票模板、打印端点与设备适配；Excel / CSV 文件导出不受影响
 - **不支持离线收银**：写操作全程在线强一致，不做本地队列、补传与冲突合并（[ADR-0004](docs/decisions/0004-scope-baseline.md)）
 
@@ -36,7 +39,7 @@ License: MIT · 语言：中文文档（发布前补英文版）
 
 Porch OS is an open-source backend for small businesses running more than one shop. Every order, stock item and membership is tied to a specific shop, so each location can be accounted for on its own while several shops can still be rolled up and compared — with shop-level isolation enforced in the data layer, not left to the client.
 
-It provides only a shared foundation: shops, catalog, members, checkout, reports and permissions. It assumes no particular industry. PostgreSQL 18.7 (ADR-0001), a Go, SQL-first backend stack (ADR-0002) and a shop-only isolation model (ADR-0003) are locked: `shop_id` is the only isolation dimension, with no tenant layer. Scope is fixed by ADR-0004: one currency (CNY), one timezone (UTC+8), no business-data archiving, no printing and no offline checkout. There is no shop-group concept (ADR-0005): cross-shop views select shops explicitly from the caller's visible set, and group-based authorization does not exist. One user can own several shops (ADR-0006): the relationship is many-to-many via `user_shops`, and the active shop is a request-time context carried explicitly on every single-shop request, validated server-side on each call and switchable in the console without any backend state or endpoint. The repository currently provides the multi-shop model, engineering conventions, a reproducible local database, a compilable bootstrap and a detailed design baseline in `docs/design/` (proposal, not frozen). The frontend stack is decided separately in `porch-console`.
+It provides only a shared foundation: shops, catalog, members, checkout, reports and permissions. It assumes no particular industry. PostgreSQL 18.7 (ADR-0001), a Go, SQL-first backend stack (ADR-0002) and a shop-only isolation model (ADR-0003) are locked: `shop_id` is the only isolation dimension, with no tenant layer. Scope is fixed by ADR-0004: one currency (CNY), one timezone (UTC+8), no business-data archiving, no printing and no offline checkout. There is no shop-group concept (ADR-0005): cross-shop views select shops explicitly from the caller's visible set, and group-based authorization does not exist. One user can own several shops (ADR-0006): the relationship is many-to-many via `user_shops`, and the active shop is a request-time context carried explicitly on every single-shop request, validated server-side on each call and switchable in the console without any backend state or endpoint. ADR-0007 closes the remaining open questions: no external integrations in R1, the frontend stack is decided by `porch-console`, orchestrated deployment is supported without read/write splitting or read replicas, cross-shop balance differences are not auto-settled, and audit logs are retained for a configurable 30 days and deleted by a scheduled worker job (this is runtime cleanup, not business-data archiving). The repository currently provides the multi-shop model, engineering conventions, a reproducible local database, a compilable bootstrap and a detailed design baseline in `docs/design/` (proposal, not frozen; all OQ closed, design proposals and NQ items still open). The concrete frontend framework is still undecided and does not block the backend.
 
 ## 核心能力（规划）
 
@@ -86,8 +89,11 @@ It provides only a shared foundation: shops, catalog, members, checkout, reports
 | 币种 / 时区 | **已定：单币种 CNY（`¥`）；统一 UTC+8 `Asia/Shanghai`** — [ADR-0004](docs/decisions/0004-scope-baseline.md) |
 | 数据归档 | **已定：暂不归档**，业务数据在线全量保留、不分区 — [ADR-0004](docs/decisions/0004-scope-baseline.md) |
 | 打印 / 离线收银 | **已定：均不支持**；文件导出保留 — [ADR-0004](docs/decisions/0004-scope-baseline.md) |
-| 外部集成（支付网关 / 短信 / 对象存储） | 待定 — OQ-03 剩余项，R1 默认不接 |
-| 前端框架 / API 客户端 / 组件库 / E2E | 待定 — 由 `porch-console` 独立决策，不阻塞后端 |
+| 外部集成（支付网关 / 短信 / 对象存储） | **已定：R1 不接**，只留网关接口位置，接入前另立 ADR — [ADR-0007](docs/decisions/0007-remaining-open-questions.md) |
+| 部署形态 | **已定：支持编排平台、暂不读写分离 / 只读副本**；进程无状态、迁移独立执行、定时任务加锁防重 — [ADR-0007](docs/decisions/0007-remaining-open-questions.md)（具体平台仍待定，见 `00` NQ-05） |
+| 跨店差额清分 | **已定：不做自动清分**，只记录消费发生店、按店分组呈现 — [ADR-0007](docs/decisions/0007-remaining-open-questions.md) |
+| 审计日志留存 | **已定：默认 30 天、可配置、定时删除**；业务请求只追加不可改删 — [ADR-0007](docs/decisions/0007-remaining-open-questions.md)（配置细则见 `00` NQ-10/11） |
+| 前端框架 / API 客户端 / 组件库 / E2E | **归属已定：由 `porch-console` 独立决策**，后端只保证 REST + OpenAPI；**具体框架仍待定**，不阻塞后端 — [ADR-0007](docs/decisions/0007-remaining-open-questions.md) |
 
 R0 的 `cmd/porch-os` 引导程序只用标准库、零外部依赖，目的是让 CI 有可复现的编译与测试基线；ADR-0002 列出的依赖从 R1 起按模块逐步引入，不一次性堆进 `go.mod`。
 
@@ -119,7 +125,7 @@ docs/               架构原则、详细设计、本地环境、决策记录
   ARCHITECTURE.md   隔离模型、分层、技术栈落地与稳健性原则
   design/           前期详细设计 00–06（总览 / 领域 / 数据库 / 接口 / 应用架构 / 横切 / 流程）
   LOCAL-DEV.md      本地 PostgreSQL 启动、验证与重置
-  decisions/        ADR：0001 数据库、0002 后端技术栈、0003 仅门店层隔离、0004 范围基线、0005 取消门店组、0006 用户-门店关系与切换
+  decisions/        ADR：0001 数据库、0002 后端技术栈、0003 仅门店层隔离、0004 范围基线、0005 取消门店组、0006 用户-门店关系与切换、0007 剩余开放问题决议
 go.mod              Go 模块定义（当前零外部依赖）
 docker-compose.yml  本地数据库（PostgreSQL 18.7）
 .env.example        配置占位（仅示例值）
@@ -135,7 +141,7 @@ CHANGELOG.md        变更记录
 |---|---|
 | `README.md` | 定位、边界、能力规划、决策状态 |
 | `docs/ARCHITECTURE.md` | 隔离模型（2.0）、分层、技术栈落地与稳健性原则 |
-| [`docs/design/00-overview.md`](docs/design/00-overview.md) | **前期详细设计总览**：质量属性、模块划分、数据归属三分法、已确认决议与剩余开放问题、分册地图 |
+| [`docs/design/00-overview.md`](docs/design/00-overview.md) | **前期详细设计总览**：质量属性、模块划分、数据归属三分法、已确认决议（全部 OQ 关闭）与 NQ 待确认清单、分册地图 |
 | `docs/design/01`–`06` | 领域模型 / 数据库设计 / 接口设计 / 应用架构 / 横切机制 / 关键流程 |
 | `docs/LOCAL-DEV.md` | 本地数据库与引导程序的启动、验证与重置 |
 | `docs/decisions/0001-postgresql-18.md` | 为什么选 PG 18.7、代价与复审条件 |
@@ -144,12 +150,13 @@ CHANGELOG.md        变更记录
 | `docs/decisions/0004-scope-baseline.md` | 单币种 / 东八区 / 暂不归档 / 不打印 / 不离线：范围基线与复审条件 |
 | `docs/decisions/0005-no-shop-groups.md` | 为什么取消门店组、跨店范围如何表达与复审条件 |
 | `docs/decisions/0006-user-shops-and-current-shop.md` | 一人多店的关系基数、当前门店的定义与页面切换协议 |
+| `docs/decisions/0007-remaining-open-questions.md` | 剩余开放问题决议：外部集成、前端框架归属、编排平台部署、跨店差额、审计日志 30 天保留，以及由此产生的待确认项 |
 | `CONTRIBUTING.md` | 分支、提交与 PR 约定 |
 | `CHANGELOG.md` | 变更记录 |
 
 ## 路线图
 
-- **R0** 工程约定、架构原则、社区文件、数据库 / 后端技术栈 / 隔离模型 / 范围基线 / 取消门店组 / 用户-门店关系与切换协议 ADR、可编译引导骨架、真实 CI 与**前期系统架构详细设计**（设计提案，当前阶段）
+- **R0** 工程约定、架构原则、社区文件、数据库 / 后端技术栈 / 隔离模型 / 范围基线 / 取消门店组 / 用户-门店关系与切换 / 剩余开放问题决议 ADR、可编译引导骨架、真实 CI 与**前期系统架构详细设计**（全部 OQ 已关闭；DP-01–07 与 NQ 清单待确认，尚未冻结）
 - **R1** 领域模型 + `shop_id` 单层隔离 + 单店 CRUD + 集成测试基线
 - **R2** 多店汇总（按显式门店集合）、门店可见范围授权、跨店会员
 - **R3** 开单收银、幂等与单号生成、报表流式导出

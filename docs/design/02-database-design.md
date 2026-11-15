@@ -1,6 +1,6 @@
 # 前期系统架构详细设计 · 02 数据库设计
 
-> 上游：[01 领域模型](01-domain-model.md)（聚合与不变量）、[ADR-0001](../decisions/0001-postgresql-18.md)（PostgreSQL 18.7）、[ADR-0003](../decisions/0003-shop-level-isolation.md)（只有 `shop_id`）、[ADR-0004](../decisions/0004-scope-baseline.md)（单币种、东八区、暂不归档）、[ADR-0005](../decisions/0005-no-shop-groups.md)（无门店组表）、[ADR-0006](../decisions/0006-user-shops-and-current-shop.md)（`user_shops` 关系基数与无当前门店表）。
+> 上游：[01 领域模型](01-domain-model.md)（聚合与不变量）、[ADR-0001](../decisions/0001-postgresql-18.md)（PostgreSQL 18.7）、[ADR-0003](../decisions/0003-shop-level-isolation.md)（只有 `shop_id`）、[ADR-0004](../decisions/0004-scope-baseline.md)（单币种、东八区、暂不归档）、[ADR-0005](../decisions/0005-no-shop-groups.md)（无门店组表）、[ADR-0006](../decisions/0006-user-shops-and-current-shop.md)（`user_shops` 关系基数与无当前门店表）、[ADR-0007](../decisions/0007-remaining-open-questions.md)（`audit_logs` 保留 30 天定时删除、暂不读写分离、迁移只跑一次）。
 > 本文给的是**设计定稿用的 schema 形状**。第 3 节 DDL 是依赖自洽、可在 PG 18.7 上直接执行的**核心表节选**（不含全部表、不含完整 `Down`）；真实迁移文件从 R1 起放 `migrations/`，由 goose 执行。
 
 ## 1. 全局约定
@@ -38,7 +38,7 @@
 | identity | `user_roles` | C | 用户 ↔ 角色 | `(user_id, role_id)` |
 | identity | **`user_shops`** | C | **用户 ↔ 可见门店集合**（授权的唯一来源；不存在分组授权中间表）；**一人多店 / 一店多人**——`users` 与 `shops` 都不带单店外键或 owner 列，也不设 `current_shop` / 偏好表（ADR-0006） | `(user_id, shop_id)` |
 | identity | `refresh_tokens` | A | 刷新令牌（存哈希） | `token_hash` 全局唯一 |
-| identity | `audit_logs` | P | 追加写、不可改；与门店相关的事件带 `shop_id`，账号级事件为 `NULL`；属基础设施表，不参与业务隔离判定 | — |
+| identity | `audit_logs` | P | 业务请求只追加、不可改删；与门店相关的事件带 `shop_id`，账号级事件为 `NULL`；属**基础设施 / 运行期数据表**，不参与业务隔离判定；**默认保留 30 天、可配置、由 worker 定时分批删除**（ADR-0007），不归档、不分区 | — |
 | catalog | `catalog_categories` | A | 目录分类 | `(parent_id, code)` |
 | catalog | `catalog_items` | A | 商品/服务目录 | `sku` 全局唯一 |
 | catalog | `shop_catalog_overrides` | B | 按店价格、上下架 | `(shop_id, catalog_item_id)` |
@@ -282,23 +282,26 @@ CREATE TABLE daily_shop_summary (
 | 库存流水 | `(shop_id, catalog_item_id, created_at DESC)` | 同上 |
 | 待派发事件 | `outbox_events (occurred_at, id) WHERE published_at IS NULL` | 部分索引，随投递完成自动缩小 |
 | 幂等清理 | `idempotency_keys (expires_at)` | 定期清理过期键 |
+| 审计清理 | `audit_logs (created_at)` | 定时按批删除超期记录（默认 30 天，ADR-0007）；截止点按 UTC+8 日界计算，配合表膨胀 / `VACUUM` 监控 |
 
 **验收要求**：每个列表与报表查询在集成测试中跑 `EXPLAIN (ANALYZE, BUFFERS)` 并存档；新增查询若在大表上出现 `Seq Scan`，PR 不予合并。索引一律可回滚，`CREATE INDEX CONCURRENTLY` 的迁移必须标记 `-- +goose NO TRANSACTION`（并发建索引不能在事务块内执行）。
 
 ## 6. 迁移与版本管理
 
 1. 迁移文件放 `migrations/`，命名 `<version>_<name>.sql`，由 **goose** 执行；**atlas** 在 CI 中比对期望 schema 与实际 schema，检测漂移。
-2. 每个迁移必须有可执行的 `Down`；禁止手工改库，禁止在应用启动时隐式建表。
+2. 每个迁移必须有可执行的 `Down`；禁止手工改库，禁止在应用启动时隐式建表。**支持编排平台后（ADR-0007），迁移由独立一次性 Job / 发布步骤执行，每个 Pod 不得各自跑迁移**；`/ready` 校验迁移版本，版本不符的实例不接流量。
 3. 破坏性变更走 **expand → backfill → contract** 三步：先加可空列/新表 → 回填与双读 → 再删旧列，任何一步都可单独回滚。
 4. 加唯一约束前必须先在预发布环境跑重复数据检查，否则迁移会中途失败。
 5. 大表加索引用 `CONCURRENTLY`，失败会留下 `INVALID` 索引，需有清理脚本。
 
-## 7. 容量与保留策略（ADR-0004：暂不归档）
+## 7. 容量与保留策略（ADR-0004：业务数据暂不归档；ADR-0007：审计日志保留 30 天）
 
-- **业务数据在线全量保留**：单据、支付、余额与库存流水、审计日志不设保留年限、不导出历史归档、不做冷热分离，也不提供「归档数据专用查询」路径。原 OQ-02 的「在线 24 个月 + 归档」假设已废弃。
-- **不做分区**：PG 声明式分区要求唯一约束包含分区键，会与「`(shop_id, order_no)` 店内唯一」及复合外键设计冲突；在没有归档需求时，分区只增加迁移与维护复杂度。容量靠索引、预聚合、keyset 分页与流式导出扛住。
-- **运行期数据仍要清理**（这不是业务归档）：`idempotency_keys` 过期键（24 h）、已投递且超期的 `outbox_events`、导出任务的临时文件；未投递事件永不删除。业务单据与流水**不参与**任何定期删除。
-- **监控与复审**：表/索引体积、大表 `Seq Scan` 比例、慢查询数、库体积是必配指标；容量阈值在 R1 压测后写入运维清单。达到阈值时**另立 ADR** 再评估分区或归档，不在代码里悄悄加保留窗口。
+- **业务数据在线全量保留**：单据、支付、余额与库存流水不设保留年限、不导出历史归档、不做冷热分离，也不提供「归档数据专用查询」路径。原 OQ-02 的「在线 24 个月 + 归档」假设已废弃。**`audit_logs` 不在此列**：它是基础设施 / 运行期数据表，按 ADR-0007 单独设定保留窗口。
+- **审计日志默认保留 30 天、可配置、定时删除**（ADR-0007）：`AUDIT_LOG_RETENTION_DAYS` 全局生效、启动时校验；worker 按 `created_at` 与 UTC+8 日界计算截止点，分批 `DELETE`、可重入、失败重试并告警。业务请求对审计记录仍**只追加、不可更新删除**，唯一允许的删除是清理任务；不导出归档、不建月度分区、不提供超期归档查询（`03` 第 8 节给出「超出保留期」的明确语义）。清理动作记结构化日志与指标，**不写回 `audit_logs`** 以免自我循环。取值上限、是否可关闭清理、批量大小与 `VACUUM` 策略见 [00 第 8.2 节 NQ-10/11](00-overview.md)。
+- **不做分区**：PG 声明式分区要求唯一约束包含分区键，会与「`(shop_id, order_no)` 店内唯一」及复合外键设计冲突；在没有归档需求时，分区只增加迁移与维护复杂度。审计日志的定期删除靠 `(created_at)` 索引 + 分批提交解决，不为它单独引入分区。容量靠索引、预聚合、keyset 分页与流式导出扛住。
+- **运行期数据仍要清理**（这不是业务归档）：`idempotency_keys` 过期键（24 h）、已投递且超期的 `outbox_events`、导出任务的临时文件、**`audit_logs` 超期记录（30 天，可配）**；未投递事件永不删除。**业务单据与流水不参与任何定期删除**。
+- **单主库读写**（ADR-0007）：支持编排平台但暂不读写分离、不引入只读副本；重报表走 `daily_shop_summary` 与流式导出。`max_conns` 按「副本数 × 每实例上限 + 运维预留 ≤ PG `max_connections`」推导，禁止沿用驱动默认值。
+- **监控与复审**：表/索引体积、大表 `Seq Scan` 比例、慢查询数、库体积、**审计清理删除行数与失败次数**是必配指标；容量阈值在 R1 压测后写入运维清单。达到阈值时**另立 ADR** 再评估分区或归档，不在代码里悄悄加保留窗口。
 - 汇总表 `daily_shop_summary` 是**派生数据**：允许从流水全量重算，重算结果必须与源一致；这是报表可信度的基础，与归档无关。
 - **不设范围外表**：不做离线收银与打印（ADR-0004），因此不存在本地待同步单据、补传队列、同步水位、打印任务/模板表；`export_jobs` 只服务于文件导出。不设门店组（ADR-0005），因此也不存在 `shop_groups` / `shop_group_members` 之类的分组表、成员关系表或 `shops` 上的分组 / 层级列。按 ADR-0006，当前门店是请求期上下文，因此也不存在 `current_shop` 表、`users.current_shop_id` 列或用户偏好表；一人多店完全由 `user_shops` 表达。
 
@@ -312,6 +315,7 @@ CREATE TABLE daily_shop_summary (
 | 业务日测试 | 在 UTC+8 日界（UTC 16:00）前后各插入一条，断言归入正确的 `business_date`，且单号日期与之一致 |
 | 隔离测试 | 用两个门店、两个用户交叉请求，断言任一响应不含对方门店数据 |
 | 计划测试 | 关键查询 `EXPLAIN` 存档，断言不出现大表 `Seq Scan` |
+| 保留测试 | 插入跨越 30 天日界（UTC+8）的审计记录，断言清理任务只删超期行、不触碰任何业务单据与流水，且业务请求无法更新 / 删除审计记录（ADR-0007） |
 
 集成测试用 `testcontainers-go` 起真实 PG，不 mock 数据访问层（ADR-0002 阻断项 ⑨）。
 
