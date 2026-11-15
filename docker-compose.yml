@@ -1,0 +1,28 @@
+# 本地开发数据库。生产部署不在此文件范围内。
+# 镜像按小版本固定（见 docs/decisions/0001-postgresql-18.md）；
+# 若官方源不可达，可换镜像加速源后重新打标签，但大版本必须保持 18.7。
+services:
+  db:
+    image: postgres:18.7
+    container_name: porch-os-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?请在 .env 中设置 POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?请在 .env 中设置 POSTGRES_DB}
+      TZ: UTC
+    ports:
+      - "${PORCH_PG_PORT:-5432}:5432"
+    # PostgreSQL 18+ 官方镜像：PGDATA=/var/lib/postgresql/18/docker，只挂父目录。
+    # 挂到旧教程里的 /var/lib/postgresql/data 会被判定为残留旧版本数据并拒绝启动。
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  pgdata:

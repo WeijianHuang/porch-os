@@ -4,7 +4,7 @@
 
 面向小微门店的开源经营系统后端：多门店统一管理、跨店会员与库存、按店出账与汇总报表。
 
-**状态：早期设计阶段。** 本仓库目前只有工程约定与架构文档，尚无可运行代码。技术栈尚未锁定，确定后会同步更新本文件与 `docs/ARCHITECTURE.md`。
+**状态：早期设计阶段。** 本仓库目前只有工程约定、架构文档与本地数据库环境，尚无可运行代码。数据库已选定 **PostgreSQL 18.7**（[ADR-0001](docs/decisions/0001-postgresql-18.md)）；后端语言 / 框架、接口风格、认证、实时方案、前端框架**仍待定**，确定后以 ADR 逐条记录并回写本文与 `docs/ARCHITECTURE.md`。
 
 License: MIT · 语言：中文文档（发布前补英文版）
 
@@ -16,7 +16,7 @@ License: MIT · 语言：中文文档（发布前补英文版）
 
 一个人开一家店时，记账靠本子就够；开到第二家、第三家，数据就开始散落在不同的表格、账号和设备里。Porch OS 要解决的就是这一步：用一套系统管理任意数量的门店，让每笔单据、每件库存、每位会员都明确属于哪家店——单店能独立核算，店群能汇总对比，并且从数据层就防止把 A 店的数据读进 B 店的页面。
 
-它只做通用的经营底座：门店与店群、商品与服务、跨店会员、开单收银、报表与权限。项目刻意不预设任何行业规则，餐饮、零售、服务业的用法由使用方自行扩展；技术栈也尚未锁定，当前仓库先固定多店模型与工程约定，选型后以 ADR 逐条记录。
+它只做通用的经营底座：门店与店群、商品与服务、跨店会员、开单收银、报表与权限。项目刻意不预设任何行业规则，餐饮、零售、服务业的用法由使用方自行扩展；数据库已定为 PostgreSQL 18.7，其余技术栈尚未锁定，当前仓库先固定多店模型、工程约定与可复现的本地数据库环境，后续选型以 ADR 逐条记录。
 
 **边界（不做什么）**
 
@@ -30,7 +30,7 @@ License: MIT · 语言：中文文档（发布前补英文版）
 
 Porch OS is an open-source backend for small businesses running more than one shop. Every order, stock item and membership is tied to a specific shop, so each location can be accounted for on its own while a group of shops can still be rolled up and compared — with shop-level isolation enforced in the data layer, not left to the client.
 
-It provides only a shared foundation: shops and shop groups, catalog, members, checkout, reports and permissions. It assumes no particular industry and deliberately leaves the tech stack undecided for now; this repository currently fixes the multi-shop model and the engineering conventions, with each choice to be recorded as an ADR once made.
+It provides only a shared foundation: shops and shop groups, catalog, members, checkout, reports and permissions. It assumes no particular industry. PostgreSQL 18.7 is the first and only locked technology choice so far (see ADR-0001); the rest of the stack remains undecided, and this repository currently fixes the multi-shop model, the engineering conventions and a reproducible local database environment.
 
 ## 核心能力（规划）
 
@@ -57,40 +57,60 @@ It provides only a shared foundation: shops and shop groups, catalog, members, c
 
 集中配置并在启动时校验、快速失败 · 类型化错误与全局错误处理 · 结构化 JSON 日志贯穿 request id · 边界处校验所有输入 · 多步写入事务化 · 数据库变更通过可回滚迁移 · 缓存一律带 TTL 且写后失效 · 后台任务幂等、可重试、有死信 · 健康检查与优雅停机 · 日志不记录密码、令牌与隐私数据。
 
-## 待定决策
+## 决策状态
 
 | 项目 | 状态 |
 |---|---|
+| 数据库 | **已定：PostgreSQL 18.7** — [ADR-0001](docs/decisions/0001-postgresql-18.md) |
+| 连接池 / 迁移工具 / 查询构建方式 | 待定（随语言与框架一并决策） |
 | 后端语言 / 框架 | 待定 |
-| 数据库 / 连接池 / 迁移工具 | 待定 |
 | 接口风格（REST / GraphQL / gRPC） | 待定 |
 | 认证（JWT 短时效 + 服务端刷新令牌等） | 待定 |
 | 实时能力（轮询 / SSE / WebSocket） | 待定 |
 | 前端框架与 API 客户端方案 | 待定 |
 
-骨架阶段刻意不锁定这些选项，也刻意不写入任何语言相关的目录结构。
+除数据库外，骨架阶段刻意不锁定其余选项，也不写入任何语言相关的目录结构。数据库只引入 `docker-compose.yml` 与环境变量占位，属于本地基础设施，不代表语言选型。
 
 ## 快速开始
 
-技术栈确定后补齐。当前只需：
+当前只有数据库可运行；应用代码尚未开始。
 
 ```bash
 git clone https://github.com/WeijianHuang/porch-os.git
 cd porch-os
-cp .env.example .env   # 按实际配置项填写，.env 不提交
+cp .env.example .env       # 把 POSTGRES_PASSWORD 改成随机值
+docker compose up -d db    # 启动 PostgreSQL 18.7
+docker compose ps          # 等待 STATUS 变为 healthy
 ```
+
+连接串、版本校验与重置方式见 [`docs/LOCAL-DEV.md`](docs/LOCAL-DEV.md)。
 
 ## 仓库结构
 
 ```
-.github/           CI 工作流与 PR 模板
-docs/              架构原则与决策记录
-.env.example       配置占位（仅示例值）
-CONTRIBUTING.md    贡献流程
-CHANGELOG.md       变更记录
+.github/            CI 工作流与 PR 模板
+docs/               架构原则、本地环境、决策记录
+  ARCHITECTURE.md   与技术栈无关的架构原则
+  LOCAL-DEV.md      本地 PostgreSQL 启动与验证
+  decisions/        ADR 决策记录（0001 已接受）
+docker-compose.yml  本地数据库（PostgreSQL 18.7）
+.env.example        配置占位（仅示例值）
+CONTRIBUTING.md     贡献流程
+CHANGELOG.md        变更记录
 ```
 
 源码目录待技术栈确定后添加。
+
+## 文档导航
+
+| 文档 | 看什么 |
+|---|---|
+| `README.md` | 定位、边界、能力规划、决策状态 |
+| `docs/ARCHITECTURE.md` | 多店模型、隔离约束、分层与稳健性原则 |
+| `docs/LOCAL-DEV.md` | 本地数据库的启动、验证与重置 |
+| `docs/decisions/0001-postgresql-18.md` | 为什么选 PG 18.7、代价与复审条件 |
+| `CONTRIBUTING.md` | 分支、提交与 PR 约定 |
+| `CHANGELOG.md` | 变更记录 |
 
 ## 路线图
 
