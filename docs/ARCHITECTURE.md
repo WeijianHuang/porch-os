@@ -1,6 +1,6 @@
 # 架构原则
 
-> 状态：早期工程阶段。数据库已定为 **PostgreSQL 18.7**（[ADR-0001](decisions/0001-postgresql-18.md)），后端技术栈已定为 **Go + SQL 优先**（[ADR-0002](decisions/0002-go-backend-stack.md)），数据隔离模型已由 [ADR-0003](decisions/0003-shop-level-isolation.md) 锁定为**仅门店层**。隔离模型见第 2.0 节，数据层落地见第 2.1 节，技术栈落地见第 8 节。前端框架由 `porch-console` 独立决策。后续模块级选型继续以 ADR 记录并回写本文。
+> 状态：早期工程阶段。数据库已定为 **PostgreSQL 18.7**（[ADR-0001](decisions/0001-postgresql-18.md)），后端技术栈已定为 **Go + SQL 优先**（[ADR-0002](decisions/0002-go-backend-stack.md)），数据隔离模型已由 [ADR-0003](decisions/0003-shop-level-isolation.md) 锁定为**仅门店层**。隔离模型见第 2.0 节，数据层落地见第 2.1 节，技术栈落地见第 8 节。前端框架由 `porch-console` 独立决策。前期系统架构详细设计见 [`design/00-overview.md`](design/00-overview.md)（设计提案，尚未冻结）。后续模块级选型继续以 ADR 记录并回写本文。
 
 ## 1. 术语表
 
@@ -139,3 +139,19 @@ R0 引导骨架仅用标准库提供 `/health`，零外部依赖；上表依赖�
 ```
 
 完整决策状态见 [`../README.md`](../README.md#决策状态)。
+
+## 10. 详细设计
+
+前期系统架构详细设计在 [`design/00-overview.md`](design/00-overview.md)，共 7 册：
+
+| 册 | 内容 |
+|---|---|
+| [00 总览](design/00-overview.md) | 质量属性与可验收目标、系统上下文、模块划分、数据归属三分法、设计提案与开放问题 |
+| [01 领域模型](design/01-domain-model.md) | 聚合边界、状态机、金额与单号值对象、领域事件、通用化扩展点 |
+| [02 数据库设计](design/02-database-design.md) | 表清单、类型与命名约定、可执行 DDL 节选、复合外键与索引策略、迁移与归档 |
+| [03 接口设计](design/03-api-design.md) | 统一响应与错误码、门店上下文、幂等、端点清单、契约冻结 |
+| [04 应用架构](design/04-application-architecture.md) | 目录结构、依赖规则、Unit of Work、中间件链、DI 与测试分层 |
+| [05 横切机制](design/05-cross-cutting.md) | 认证授权、幂等、并发、Outbox、报表三层读模型、可观测性与安全基线 |
+| [06 关键流程](design/06-key-flows.md) | 开单结账、退款、跨店核销、库存调拨、报表导出、授权即时生效 |
+
+该套文档是**设计提案、尚未冻结**，以本文与三份 ADR 为上游约束。冻结后，任何改动 schema、唯一性范围、隔离条件、状态机或错误语义的 PR 必须同步更新对应分册。

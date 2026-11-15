@@ -16,6 +16,7 @@
 - `docs/decisions/0002-go-backend-stack.md`：后端技术栈 ADR（已接受）——Go + SQL 优先、逐项理由、代码评审阻断项与复审条件。
 - `go.mod` 与 `cmd/porch-os/`：零外部依赖的 R0 引导程序（`/health`）及单测，作为可复现的编译基线。
 - `docs/decisions/0003-shop-level-isolation.md`：隔离模型 ADR（已接受）——只有 `shop_id` 一层、禁止租户 / 组织 / 公司等上层维度、跨店共享实体的处理规则与复审条件。
+- `docs/design/00`–`06`：**前期系统架构详细设计**（设计提案，尚未冻结）——00 总览（质量属性、模块划分、数据归属三分法、7 项设计提案与 8 个开放问题）、01 领域模型与状态机、02 数据库 schema 与可执行 DDL 节选、03 接口契约与错误码、04 应用架构与依赖规则、05 横切机制、06 六条关键流程时序与测试清单。
 
 ### 变更
 
@@ -27,3 +28,5 @@
 - **CI 由骨架检查升级为真实构建**：`build` job 执行 `go build` / `go vet` / `gofmt` / `go test -race`，`hygiene` job 保留必需文件与密钥、真实数据防护。
 - **隔离模型收敛为唯一权威（ADR-0003）**：README 决策状态新增「仅门店层」一行、去掉「会员档案归属组织」等隐含上层实体表述，边界与多店模型改为明确禁止 `tenant_id` / `org_id` / `company_id`；`ARCHITECTURE.md` 新增 2.0「隔离模型」小节、术语表把「总部视角」改为「跨店视角」、评审阻断项增加第 ⑩ 条；ADR-0001 / ADR-0002、PR 模板、CONTRIBUTING 同步指向 ADR-0003；`porch-console` 明确只有门店上下文、没有组织 / 租户切换。
 - 前端框架、API 客户端、组件库与 E2E 工具仍待定，由 `porch-console` 独立决策。
+- README 与 `ARCHITECTURE.md` 增加详细设计导航（新增第 10 节）；`porch-console` 的错误重试约定改为按响应体 `error.retryable` 判定，并指向 `03-api-design.md`。
+- `docs/design/02` 的核心 DDL 节选已在本地 PostgreSQL 18.7 容器事务中实测通过并回滚，未污染 `public` schema。
