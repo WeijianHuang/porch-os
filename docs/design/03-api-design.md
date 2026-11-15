@@ -102,6 +102,7 @@
 | `code` | HTTP | retryable | 典型触发 |
 |---|---|---|---|
 | `INVALID_ARGUMENT` | 400 | 否 | 参数格式、缺失必填、非法排序字段 |
+| `AUDIT_RETENTION_WINDOW_EXCEEDED` | 400 | 否 | 审计查询 / 导出的 `created_at_from` 早于保留窗口 cutoff；`details` 带 `earliest_queryable_at`、`retention_days`、`cutoff_at`（ADR-0008 / [08](08-audit-retention.md) §4） |
 | `SHOP_CONTEXT_REQUIRED` | 400 | 否 | 单店业务请求未显式指定当前门店（不再按可见门店数量隐式默认，ADR-0006） |
 | `UNAUTHENTICATED` | 401 | 否 | 令牌缺失/过期/无效 |
 | `PERMISSION_DENIED` | 403 | 否 | 角色不足、门店不在可见集合、缺跨店权限 |
@@ -216,8 +217,9 @@
 | 支付 / 短信 / 对象存储的回调、投递与配置端点 | R1 不提供（ADR-0007） | R1 不接任何外部服务，Outbox 订阅者全部在进程内；接入前另立 ADR |
 | 跨店差额清分、内部往来账、结算单端点 | 不提供（ADR-0007） | 差额只用按店分组的报表呈现，不做自动清分 |
 | 按 ID 修改 / 删除审计记录、审计归档查询端点 | 不提供（ADR-0007） | 审计记录对业务请求只追加；超期记录仅由 worker 清理任务删除，不导出归档 |
+| 审计专用导出端点 `/audit-logs/export` | 不提供（ADR-0008） | 窗口内导出复用统一 `POST /exports` + 流式下载，并执行同一保留窗口校验 |
 
-**审计日志的查询边界（ADR-0007）**：窗口内（默认 30 天）的审计记录可检索；**超出保留期的查询必须返回明确的「超出保留期」语义，不得伪装成空结果或静默少数据**。具体错误码 / 文案、是否单独提供窗口内审计导出端点，仍待确认（[00 第 8.2 节 NQ-12](00-overview.md)），契约冻结（DP-06）前必须定。保留天数、清理窗口口径等配置项一律走运维配置，不通过 API 暴露。
+**审计日志的查询边界（ADR-0007 / ADR-0008，已冻结）**：窗口按 UTC+8 自然日计算（`cutoff = 当日 00:00 − 30 天`）；`created_at_from < cutoff` 一律返回 **`400 AUDIT_RETENTION_WINDOW_EXCEEDED`**（`retryable=false`），`details` 带 `earliest_queryable_at` / `retention_days` / `cutoff_at`，`message` 给出可读的最早可查时间；**不得伪装成空结果、不得静默把起始时间裁剪进窗口**。缺省 `created_at_from` 时服务端默认从 `cutoff` 起查，不报错。**不单独提供审计导出端点**：窗口内导出复用统一 `POST /exports` + 流式下载，并在创建任务时执行同一校验、返回同一错误码。保留天数与窗口口径是运维配置，不通过 API 暴露；完整契约见 [08](08-audit-retention.md) §4。R1 首批不含审计查询界面，但错误码已冻结。
 
 ## 9. 超时、限流与契约冻结（DP-06）
 
@@ -229,7 +231,7 @@
 | 限流 | 按「主体 + 门店」维度，返回 `429` + `Retry-After` |
 | WebSocket | 30 s 心跳、断线重连；推送携带 `shop_id`，不跨店广播 |
 
-**契约冻结**：
+**契约冻结（已由 ADR-0008 冻结，DP-06）**：
 
 1. `api/openapi.yaml` 由注释生成并提交进仓库；CI 校验「重新生成后无 diff」，防止代码与契约漂移。
 2. 响应快照测试只断言**字段集合与类型**，动态值（时间、ID、金额）做归一化，不比对字面值。

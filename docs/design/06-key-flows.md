@@ -167,14 +167,14 @@ GET /exports/{id}/download ──► 流式下载
 
 > 服务端全程无状态：没有切换端点、没有 `current_shop` 表 / 列，`user_shops` 是唯一授权来源；切换不触发授权重算，授权变更仍在下一个请求生效（F-06）。
 
-## F-08 审计日志定时清理（ADR-0007）
+## F-08 审计日志定时清理（ADR-0007 / 0008）
 
 `audit_logs` 是基础设施 / 运行期数据，默认保留 **30 天**（`AUDIT_LOG_RETENTION_DAYS` 全局可配、启动时校验）。这是**唯一允许删除审计记录的路径**，且不属于业务数据归档。
 
-1. worker 领取带稳定执行键的清理任务，先取数据库 advisory lock；编排平台多副本下同一时刻只有一个执行者。
-2. 按 `created_at` 与 UTC+8 日界计算截止点 → 分批 `DELETE ... WHERE created_at < cutoff` → 每批独立提交，失败重试 + 告警；命中 `(created_at)` 索引，不建分区、不导出归档。
-3. 记录删除行数、耗时、当前保留天数、失败次数等指标与结构化日志；**不写回 `audit_logs`**，否则清理会不断产生新记录形成自我循环。
-4. 业务侧只读：业务请求无法更新 / 删除审计记录；超出保留期的查询必须返回明确的「超出保留期」语义而非空结果（错误码 / 文案见 [00 第 8.2 节 NQ-12](00-overview.md)）。**业务单据与流水全程不参与任何删除**。
+1. worker × 2 各自在 UTC+8 03:30 触发，执行键 `job:audit_cleanup:<UTC+8 业务日>`；用 `pg_try_advisory_lock` 抢锁，抢不到记 `skipped` 并跳过，同一时刻只有一个执行者（[07](07-deployment-and-operations.md) §4.2）。
+2. cutoff = 当日 00:00（UTC+8）− 30 天（**自然日口径，不是滚动 30×24h**）→ 单批 5000 行 `DELETE ... WHERE created_at < cutoff` → 每批独立提交，失败记 `failed` + 告警；命中 `(created_at)` 索引，不建分区、不导出归档、不 `VACUUM FULL`（[08](08-audit-retention.md) §2/§3）。
+3. 在 `audit_log_cleanup_runs` 写一条运行痕迹（cutoff / 删除行数 / 批次数 / 状态），并上报指标与结构化日志；**不写回 `audit_logs`**，否则清理会不断产生新记录形成自我循环（[08](08-audit-retention.md) §5）。
+4. 业务侧只读：业务请求无法更新 / 删除审计记录；超出保留期的查询必须返回明确的「超出保留期」语义而非空结果（错误码为 `400 AUDIT_RETENTION_WINDOW_EXCEEDED` + `earliest_queryable_at`，见 [08](08-audit-retention.md) §4）。**业务单据与流水全程不参与任何删除**。
 
 > 边界：审计日志定时删除 ≠ 业务数据归档；运行期清理 ≠ 业务单据删除；业务请求不可删审计 ≠ 清理任务不可删。
 
@@ -208,4 +208,4 @@ GET /exports/{id}/download ──► 流式下载
 
 ---
 
-返回 [00 总览](00-overview.md) 查看分册地图、已确认决议与 NQ 待确认清单。
+返回 [00 总览](00-overview.md) 查看分册地图、已确认决议与已关闭的 OQ / NQ 清单。

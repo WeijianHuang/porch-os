@@ -1,6 +1,6 @@
 # 架构原则
 
-> 状态：早期工程阶段。数据库已定为 **PostgreSQL 18.7**（[ADR-0001](decisions/0001-postgresql-18.md)），后端技术栈已定为 **Go + SQL 优先**（[ADR-0002](decisions/0002-go-backend-stack.md)），数据隔离模型已由 [ADR-0003](decisions/0003-shop-level-isolation.md) 锁定为**仅门店层**，业务范围基线已由 [ADR-0004](decisions/0004-scope-baseline.md) 锁定为**单币种 CNY / 统一 UTC+8 / 暂不归档 / 不打印 / 不离线**，门店组概念已由 [ADR-0005](decisions/0005-no-shop-groups.md) 取消（跨店改用显式门店集合），用户可拥有多间门店与「当前门店」切换协议已由 [ADR-0006](decisions/0006-user-shops-and-current-shop.md) 定义；**剩余开放问题已由 [ADR-0007](decisions/0007-remaining-open-questions.md) 全部关闭**：R1 不接外部服务、前端框架归属 `porch-console`、支持编排平台且暂不读写分离、不做跨店自动清分、审计日志保留 30 天可配并定时删除。隔离模型见第 2.0 节，数据层落地见第 2.1 节，技术栈落地见第 8 节。前端框架由 `porch-console` 独立决策（决策权已确认，具体框架仍未选定）。前期系统架构详细设计见 [`design/00-overview.md`](design/00-overview.md)（**全部 OQ 已关闭，DP-01–07 仍待评审，尚未冻结**）。后续模块级选型继续以 ADR 记录并回写本文。
+> 状态：早期工程阶段。数据库已定为 **PostgreSQL 18.7**（[ADR-0001](decisions/0001-postgresql-18.md)），后端技术栈已定为 **Go + SQL 优先**（[ADR-0002](decisions/0002-go-backend-stack.md)），数据隔离模型已由 [ADR-0003](decisions/0003-shop-level-isolation.md) 锁定为**仅门店层**，业务范围基线已由 [ADR-0004](decisions/0004-scope-baseline.md) 锁定为**单币种 CNY / 统一 UTC+8 / 暂不归档 / 不打印 / 不离线**，门店组概念已由 [ADR-0005](decisions/0005-no-shop-groups.md) 取消（跨店改用显式门店集合），用户可拥有多间门店与「当前门店」切换协议已由 [ADR-0006](decisions/0006-user-shops-and-current-shop.md) 定义；**剩余开放问题已由 [ADR-0007](decisions/0007-remaining-open-questions.md) 全部关闭**：R1 不接外部服务、前端框架归属 `porch-console`、支持编排平台且暂不读写分离、不做跨店自动清分、审计日志保留 30 天可配并定时删除。隔离模型见第 2.0 节，数据层落地见第 2.1 节，技术栈落地见第 8 节。前端框架由 `porch-console` 独立决策（NQ-14 已决：以既有内部前端工程实践为依据，工程名称不写入公开仓库）。**NQ-01–16 全部关闭、DP-01–07 全部接受，前期系统架构详细设计已冻结**（[ADR-0008](decisions/0008-design-freeze-and-nq-resolutions.md)：Docker 2+2 + Go `cmd/job` + 数据库共享、R1 范围与验收标准），见 [`design/00-overview.md`](design/00-overview.md)。后续模块级选型继续以 ADR 记录并回写本文。
 
 ## 1. 术语表
 
@@ -122,7 +122,7 @@
 | 缓存 | Redis（跨实例）+ ristretto（进程内），带 TTL、写后失效 |
 | 可观测性 | slog JSON 日志 + Prometheus 指标 + OpenTelemetry 链路 |
 | 测试 | 领域逻辑纯函数单测；集成测试用 testcontainers-go 起真实 PG，不 mock 服务层 |
-| 部署 | 多阶段构建 → `distroless/static`；`api` / `worker` 无状态、支持编排平台水平扩缩；**单主库读写，暂不读写分离 / 只读副本**；迁移由独立一次性任务执行、定时任务靠数据库锁防重、连接池按副本数推导（ADR-0007）。本地 Compose 仅用于开发 |
+| 部署 | 多阶段构建 → `distroless/static`；`api` / `worker` 无状态、支持编排平台水平扩缩；**单主库读写，暂不读写分离 / 只读副本**；迁移由独立一次性任务执行、定时任务靠数据库锁防重、连接池预算 80 ≤ 100（ADR-0007 / ADR-0008）。**本期落地 Docker 2+2 + Go `cmd/job` + 数据库共享，见 `design/07`**；本地 Compose 仅用于开发 |
 
 **代码评审阻断项**：① 不建实体关联图，结构体之间只持 ID；② 一条查询返回一个场景专用扁平 DTO；③ 不使用数据库视图承载计算口径；④ 动态查询必须用 `$1` 占位符且排序字段走白名单；⑤ 金额禁用浮点；⑥ 写操作必须带幂等键，单号唯一性靠数据库约束并写明范围；⑦ 报表导出流式写出；⑧ 跨店权限判定不缓存；⑨ 集成测试用真实 PG 容器；⑩ **不引入 `tenant_id` / `org_id` / `company_id` 或任何上层隔离维度**（ADR-0003），也不引入门店组 / 分组实体（ADR-0005）；⑪ **不把当前门店做成服务端状态**：禁止 `users.shop_id` / `shops.owner_user_id` 单外键、`current_shop` 表、切换端点或把当前门店写进 JWT，单店请求缺 `X-Shop-Id` 必须报 400（ADR-0006）；⑫ **不引入 R1 范围外的外部 SDK、只读副本 / 读写分离、内部往来账或自动清分**，不在进程启动时跑迁移，审计记录只允许 worker 清理任务删除（ADR-0007）。
 
@@ -139,6 +139,7 @@ R0 引导骨架仅用标准库提供 `/health`，零外部依赖；上表依赖�
 - [0005 · 取消门店组概念，跨店能力改用显式门店集合](decisions/0005-no-shop-groups.md)（修订 0003 第 3 条）
 - [0006 · 用户可拥有多间门店，当前门店是可切换的请求期上下文](decisions/0006-user-shops-and-current-shop.md)
 - [0007 · 剩余开放问题决议：外部集成、前端框架归属、编排平台部署、跨店差额、审计日志保留](decisions/0007-remaining-open-questions.md)（修订 0004 第 3 节第 3 条）
+- [0008 · NQ 全部决议、详细设计冻结与 R1 运行基线](decisions/0008-design-freeze-and-nq-resolutions.md)（修订 0006 / 0007 的历史状态）
 
 后续选型在 `docs/decisions/` 下按 `NNNN-标题.md` 递增记录，模板：
 
@@ -156,16 +157,19 @@ R0 引导骨架仅用标准库提供 `/health`，零外部依赖；上表依赖�
 
 ## 10. 详细设计
 
-前期系统架构详细设计在 [`design/00-overview.md`](design/00-overview.md)，共 7 册：
+前期系统架构详细设计在 [`design/00-overview.md`](design/00-overview.md)，**已冻结**（ADR-0008），共 10 册：
 
 | 册 | 内容 |
 |---|---|
-| [00 总览](design/00-overview.md) | 质量属性与可验收目标、系统上下文、模块划分、数据归属三分法、设计提案与开放问题 |
+| [00 总览](design/00-overview.md) | 质量属性与可验收目标、系统上下文、模块划分、数据归属三分法、已接受的设计决策与已关闭的 OQ / NQ 清单 |
 | [01 领域模型](design/01-domain-model.md) | 聚合边界、状态机、金额与单号值对象、领域事件、通用化扩展点 |
 | [02 数据库设计](design/02-database-design.md) | 表清单、类型与命名约定、可执行 DDL 节选、复合外键与索引策略、迁移与容量保留 |
 | [03 接口设计](design/03-api-design.md) | 统一响应与错误码、门店上下文与切换协议、幂等、端点清单、契约冻结 |
 | [04 应用架构](design/04-application-architecture.md) | 目录结构、依赖规则、Unit of Work、中间件链、DI 与测试分层 |
 | [05 横切机制](design/05-cross-cutting.md) | 认证授权、幂等、并发、Outbox、报表三层读模型、运行期清理任务、可观测性与安全基线 |
 | [06 关键流程](design/06-key-flows.md) | 开单结账、退款、跨店核销、库存调拨、报表导出、授权即时生效、门店切换、审计日志定时清理 |
+| [07 部署与运行基线](design/07-deployment-and-operations.md) | Docker 2+2、Go Job 与数据库共享、连接池预算、advisory lock 例子、容量阈值、压测基线 |
+| [08 审计日志保留与清理](design/08-audit-retention.md) | 保留天数默认规则、UTC+8 自然日窗口、超期错误契约、运行痕迹与告警 |
+| [09 跨店差额与清分边界](design/09-cross-shop-difference.md) | 差额来源、按店分组呈现、不做自动清分的理由与未来启用条件 |
 
-该套文档是**设计提案、尚未冻结**，以本文与七份 ADR 为上游约束。**OQ-01–08 已全部关闭**；剩余待确认项改用 NQ 编号（`00` 第 8.2 节），主要是 7 项设计提案 DP-01–07 的评审与本轮决议的实现细节。冻结后，任何改动 schema、唯一性范围、隔离条件、状态机或错误语义的 PR 必须同步更新对应分册。
+该套文档**已由 [ADR-0008](decisions/0008-design-freeze-and-nq-resolutions.md) 冻结**，以本文与八份 ADR 为上游约束。**OQ-01–08、NQ-01–16 与 DP-01–07 全部关闭**（`00` 第 8 节）。冻结后，任何改动 schema、唯一性范围、隔离条件、状态机、错误语义、端点清单，或 `07`–`09` 中固定的副本数 / 连接池 / 保留天数 / 清理窗口基线的 PR，必须**先改设计或 ADR 再改代码**并同步对应分册；只改实现、不改契约的 PR 不需要改设计文档。

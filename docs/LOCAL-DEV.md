@@ -2,7 +2,7 @@
 
 > 状态：数据库与 R0 引导程序可运行；业务代码尚未开始。引导程序只用 Go 标准库，不连接数据库。
 >
-> **本文只覆盖本地开发**。按 [ADR-0007](decisions/0007-remaining-open-questions.md)，生产以编排平台部署无状态的 `api` / `worker`，单主库读写、暂不读写分离；迁移由独立一次性任务执行、定时任务靠数据库锁防重、连接池按副本数推导。`docker-compose.yml` 不是生产部署清单，具体平台仍待确认（`design/00` 第 8.2 节 NQ-05）。
+> **本文只覆盖本地开发**。按 [ADR-0007](decisions/0007-remaining-open-questions.md) 与 [ADR-0008](decisions/0008-design-freeze-and-nq-resolutions.md)，本期落地为 **Docker 部署、无状态 `api` × 2 / `worker` × 2**，单主库读写、暂不读写分离；迁移只由 Go `cmd/job migrate` 执行，跨副本共享状态与定时任务互斥全部走 PostgreSQL（advisory lock + 版本表 + 运行记录表），连接池预算 80 ≤ 100。`docker-compose.yml` 只是开发库，不是生产部署清单；平台级配置注入 / Ingress / TLS / 滚动发布时长本期不定义（NQ-09）。完整基线见 [`design/07-deployment-and-operations.md`](design/07-deployment-and-operations.md)。
 
 ## 前置条件
 

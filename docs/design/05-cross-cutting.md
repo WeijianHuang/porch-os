@@ -1,6 +1,6 @@
 # 前期系统架构详细设计 · 05 横切机制
 
-> 上游：[00 总览](00-overview.md) 第 2 节（质量属性）、[03 接口设计](03-api-design.md)（错误码与幂等头）、[04 应用架构](04-application-architecture.md)（中间件链与 UoW）、[ADR-0004](../decisions/0004-scope-baseline.md)（范围基线）、[ADR-0005](../decisions/0005-no-shop-groups.md)（授权唯一来源）、[ADR-0006](../decisions/0006-user-shops-and-current-shop.md)（一人多店、当前门店不落库、缓存键含门店）、[ADR-0007](../decisions/0007-remaining-open-questions.md)（编排平台、暂不读写分离、审计日志保留 30 天定时删除）。
+> 上游：[00 总览](00-overview.md) 第 2 节（质量属性）、[03 接口设计](03-api-design.md)（错误码与幂等头）、[04 应用架构](04-application-architecture.md)（中间件链与 UoW）、[ADR-0004](../decisions/0004-scope-baseline.md)（范围基线）、[ADR-0005](../decisions/0005-no-shop-groups.md)（授权唯一来源）、[ADR-0006](../decisions/0006-user-shops-and-current-shop.md)（一人多店、当前门店不落库、缓存键含门店）、[ADR-0007](../decisions/0007-remaining-open-questions.md)（编排平台、暂不读写分离、审计日志保留 30 天定时删除）、[ADR-0008](../decisions/0008-design-freeze-and-nq-resolutions.md)（设计冻结、Docker 2+2、Go Job、审计与容量基线）。
 > 本册定义「跨所有模块都成立的机制」。这些机制一旦漏一个，症状通常是**静默错数据**而不是报错，所以优先级高于便利性。
 
 ## 1. 认证与授权
@@ -111,11 +111,11 @@ worker：  批量领取未派发事件（FOR UPDATE SKIP LOCKED）
 | 项 | 规则 |
 |---|---|
 | 进程 | 只在 `cmd/worker`，`cmd/api` 请求处理器不启动长任务 |
-| 调度 | `robfig/cron/v3` + 分布式锁（R1 用数据库 advisory lock，R2 可换 `redsync`）；**编排平台多副本下靠同一把锁保证一个执行键只跑一次**（ADR-0007） |
+| 调度 | `robfig/cron/v3` + 分布式锁（R1 用数据库 advisory lock，R2 可换 `redsync`）；**Docker 2+2 下每个执行键一把会话级 advisory lock，抢不到即跳过**；命名、Go 例子与「同一条连接加解锁」陷阱见 [07](07-deployment-and-operations.md) §4.2（ADR-0007 / 0008） |
 | 幂等 | 每个任务有稳定的执行键；重复触发不产生重复汇总/重复扣减/重复删除 |
 | 汇总重算 | 按 `(shop_id, business_date)` 幂等覆盖写 `daily_shop_summary`，不累加；`business_date` 按 UTC+8 口径 |
 | 清理范围 | 只清理幂等键、已投递事件、导出临时文件、**审计日志超期记录**等运行期数据；**业务数据暂不归档、不设保留窗口**（ADR-0004 / 0007） |
-| 审计清理 | 默认保留 30 天（`AUDIT_LOG_RETENTION_DAYS` 全局可配、启动时校验）；按 `created_at` + UTC+8 日界算截止点，分批 `DELETE`、可重入、不建分区、不导出归档；记录删除行数/耗时/失败次数等指标，**不写回 `audit_logs`**（ADR-0007） |
+| 审计清理 | 默认保留 30 天（`AUDIT_LOG_RETENTION_DAYS` 全局可配、启动时校验）；按 UTC+8 **自然日** cutoff 算截止点，每日 03:30、单批 5000 行、逐批提交、可重入、不建分区、不导出归档；运行痕迹落 `audit_log_cleanup_runs`，指标与告警见 [08](08-audit-retention.md) §5，**不写回 `audit_logs`**（ADR-0007 / 0008） |
 | 失败 | 重试 + 死信 + 告警；不允许静默吞异常；清理失败不得悄悄缩短或延长保留窗口 |
 | 停机 | 优雅停机：停止领取新任务，在途任务有超时上限 |
 
@@ -136,14 +136,14 @@ worker：  批量领取未派发事件（FOR UPDATE SKIP LOCKED）
 - 复杂口径写在 `adapter/postgres/derived/*.sql`，受版本控制、可 diff、可 `EXPLAIN`；**不建数据库视图**。
 - 导出任务失败要显式置 `failed` 并在响应里给出原因，不允许返回空文件或 `null`。
 - L3 只产出 Excel / CSV 文件供下载，**不生成打印小票、不调用打印设备**（ADR-0004）；业务数据暂不归档，导出范围不受保留窗口裁剪。
-- **暂不读写分离、不引入只读副本**（OQ-05 已由 [ADR-0007](../decisions/0007-remaining-open-questions.md) 关闭）：支持编排平台多副本部署，但所有读写走同一个主库，重报表靠 L2 预聚合与 L3 流式导出扛住；不引入复制延迟下的「刚结账查不到」。
+- **暂不读写分离、不引入只读副本**（OQ-05 已由 [ADR-0007](../decisions/0007-remaining-open-questions.md) 关闭）：本期落地 Docker 2+2 多副本（ADR-0008 / [07](07-deployment-and-operations.md)），但所有读写走同一个主库，重报表靠 L2 预聚合与 L3 流式导出扛住；不引入复制延迟下的「刚结账查不到」。
 
 ## 9. 可观测性
 
 | 类别 | 内容 |
 |---|---|
 | 结构化日志 | JSON，必带 `request_id`、`user_id`、`shop_id`（可空）、`route`、`status`、`duration_ms`、`error_code`；手机号等 PII 掩码；不记密码、令牌、请求体全文 |
-| 指标 | 请求 QPS / 延迟分位 / 错误码分布、DB 连接池使用率与等待时长、慢查询数、Outbox 积压与最老事件年龄、死信数、导出任务时长与内存、缓存命中率、**表与索引体积 / 库体积 / 大表 `Seq Scan` 比例**（暂不归档，容量必须可观测，ADR-0004）、**审计清理删除行数 / 耗时 / 失败次数 / 当前保留天数**（ADR-0007） |
+| 指标 | 请求 QPS / 延迟分位 / 错误码分布、DB 连接池使用率与等待时长、慢查询数、Outbox 积压与最老事件年龄、死信数、导出任务时长与内存、缓存命中率、**表与索引体积 / 库体积 / 大表 `Seq Scan` 比例**（暂不归档，容量必须可观测，ADR-0004）、**`porch_audit_cleanup_*` 系列指标、`porch_audit_retention_days`、`porch_audit_earliest_queryable_timestamp_seconds`、清理运行记录与 7 条告警规则**（ADR-0007 / 0008，见 [08](08-audit-retention.md) §5） |
 | 追踪 | OpenTelemetry，span 覆盖 HTTP → 用例 → SQL；采样率可配，错误请求强制采样 |
 | 告警 | 5xx 比例、慢查询、Outbox 积压、连接池打满、跨店权限拒绝突增、导出失败率 |
 | 健康检查 | `/health`（进程存活）、`/ready`（数据库连通 + 迁移版本符合预期） |
@@ -156,7 +156,7 @@ worker：  批量领取未派发事件（FOR UPDATE SKIP LOCKED）
 | `statement_timeout` | 5 s（报表会话 30 s） | 防止单条慢 SQL 占死连接 |
 | `idle_in_transaction_session_timeout` | 10 s | 防止事务开着不提交 |
 | `lock_timeout` | 3 s | 快速失败优于排队 |
-| `max_conns` | 显式设置，按实例规格压测确定 | **禁止使用驱动默认值**；`api` 与 `worker` 分开配；编排平台下按「副本数 × 每实例上限 + 运维预留 ≤ PG `max_connections`」推导（ADR-0007，具体数值见 [00 第 8.2 节 NQ-07](00-overview.md)） |
+| `max_conns` | **`api` 20 / `worker` 10 / `job` 5**（2+2 合计 80 ≤ 100） | **禁止使用驱动默认值**；`api` 与 `worker` 分开配；按「副本数 × 每实例上限 + 运维预留 ≤ PG `max_connections`」推导；预算表、压测基线与扩副本规则见 [07](07-deployment-and-operations.md) §4（ADR-0008） |
 | 导出 | 无请求级超时（异步任务），但单批次有超时与重试 | 长任务不占 HTTP 连接 |
 
 ## 11. 安全基线
@@ -164,7 +164,7 @@ worker：  批量领取未派发事件（FOR UPDATE SKIP LOCKED）
 - 全站 HTTPS；CORS 显式来源白名单，生产禁用通配符；统一安全响应头。
 - 输入在边界校验（validator），排序字段走白名单，动态 SQL 只用参数绑定。
 - 日志与错误信息不含堆栈、SQL、密钥、PII；数据库原始错误不返回客户端。
-- 审计日志 `audit_logs` 记录「谁、在哪个店、做了什么、什么结果」；**对业务请求只追加、不可更新删除**，唯一允许删除的是 worker 定时清理任务（默认保留 30 天、可配置、分批可重入，ADR-0007）。这不是业务数据归档，也不允许把清理范围扩展到单据 / 流水。
+- 审计日志 `audit_logs` 记录「谁、在哪个店、做了什么、什么结果」；**对业务请求只追加、不可更新删除**，唯一允许删除的是 worker 定时清理任务（默认 30 天、取值 `1..3650`、UTC+8 自然日窗口、分批可重入、有运行痕迹与告警，ADR-0007 / 0008，见 [08](08-audit-retention.md)）。这不是业务数据归档，也不允许把清理范围扩展到单据 / 流水。
 - 依赖用 `govulncheck` 扫描；镜像多阶段构建到 `distroless/static`，非 root 运行。
 - 限流按「主体 + 门店」，防刷与防越权枚举；越权拒绝统一 `403`，不区分门店是否存在。
 

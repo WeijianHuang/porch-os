@@ -9,7 +9,8 @@
 porch-os/
 ├── cmd/
 │   ├── api/main.go            # HTTP 进程：装配 + 启动 + 优雅停机
-│   └── worker/main.go         # 后台进程：预聚合 / Outbox 派发 / 导出 / 定时任务
+│   ├── worker/main.go         # 后台进程：预聚合 / Outbox 派发 / 导出 / 定时任务
+│   └── job/main.go            # 一次性任务：goose 迁移 / 按需清理与重算（ADR-0008）
 ├── internal/
 │   ├── domain/                # 零外部依赖：值对象、状态机、计价、折叠纯函数
 │   │   ├── money/             #   Money、分摊 Allocate
@@ -67,10 +68,11 @@ porch-os/
 |---|---|---|
 | `cmd/api` | 在线请求、WebSocket、健康检查、指标端点 | 不跑定时汇总、不跑长任务 |
 | `cmd/worker` | 日报预聚合、Outbox 派发、导出任务、运行期数据清理（含 **`audit_logs` 30 天定时清理**，ADR-0007）、定时任务 | 不监听 HTTP 业务端口（仅内部健康探针）；**不做业务数据归档**（ADR-0004）；**不投递外部服务**（ADR-0007） |
+| `cmd/job` | 一次性 Go 进程：goose 迁移、按需审计清理 / 汇总重算 | 不常驻、不监听业务端口；**不在其它进程的启动流程里被调用** |
 
 两者共用 `internal/` 与同一套迁移；数据库配置相同但连接池上限独立设置。请求处理器里**不允许**直接启动 goroutine 跑长任务：长任务一律落 `export_jobs` / Outbox，由 worker 领取。
 
-**编排平台部署约束（ADR-0007）**：`api` / `worker` 必须无状态、可水平扩缩（当前门店在客户端、权限每次请求实时推导，无需会话粘滞）；配置与密钥全部由环境变量 / 平台 Secret 注入；单主库读写，**暂不读写分离**；迁移由独立一次性任务执行，**任何进程启动时都不得跑迁移或隐式建表**；定时任务靠数据库 advisory lock 保证多副本下只跑一次；`max_conns` 按副本数推导。`/health` 用于存活、`/ready` 校验数据库连通与迁移版本，版本不符不接流量；优雅停机先摘流量再等在途任务收尾。本地 `docker-compose.yml` 只用于开发。
+**多副本部署约束（ADR-0007 能力 + ADR-0008 本期落地）**：当前落地为 **Docker，`api` × 2 / `worker` × 2**，另有一次性 Go `cmd/job`；`api` / `worker` 无状态、可水平扩缩（当前门店在客户端、权限每次请求实时推导，无需会话粘滞）；配置与密钥全部由环境变量注入、启动即校验；单主库读写，**暂不读写分离**；迁移只由 `cmd/job migrate` 执行，**任何常驻进程启动时都不得跑迁移或隐式建表**；跨副本共享状态与互斥**全部走 PostgreSQL**（goose 版本表、advisory lock、运行记录表、Outbox / 幂等 / 导出任务表），本期不引入 Redis 协调或平台 Job；`max_conns` 按 2+2 预算显式配置（80 ≤ 100）。`/health` 判存活、`/ready` 用 `EXPECTED_SCHEMA_VERSION` 校验版本，不符返回 503 不接流量；优雅停机先摘流量再等在途任务收尾。配置注入 / Ingress / TLS / 滚动发布时长本期不定义（NQ-09）。本地 `docker-compose.yml` 只用于开发；完整数值、发布顺序与锁例子见 [07](07-deployment-and-operations.md)。
 
 ## 4. 中间件链（顺序有语义，不可随意调整）
 
@@ -148,11 +150,11 @@ func (uc *Checkout) Pay(ctx context.Context, cmd PayCommand) (Result, error) {
 ## 8. 配置、启动与依赖注入
 
 - `koanf` 从环境变量与 `.env` 合并配置；**启动时集中校验**，缺关键配置立即退出，不运行到一半才报错。
-- 必配：`DATABASE_URL`、`PORT`、JWT 签名密钥、日志级别、连接池上限、各类超时、**`AUDIT_LOG_RETENTION_DAYS`（默认 30，启动时校验，ADR-0007）**。密钥只存在本地环境，不进仓库（CI 的 hygiene job 拦截）。
-- 固定常量：`APP_TIMEZONE=Asia/Shanghai`、币种 `CNY`，启动时校验且**不允许按店或按请求覆盖**；业务日与单号日期的时间换算集中在 `internal/domain/`，SQL 中显式写 `AT TIME ZONE 'Asia/Shanghai'`（ADR-0004）。审计保留天数同样全局生效，不通过 API 或按店覆盖（取值上限等细则见 [00 第 8.2 节 NQ-10](00-overview.md)）。
+- 必配：`DATABASE_URL`、`PORT`、JWT 签名密钥、日志级别、连接池上限（`API_MAX_CONNS=20` / `WORKER_MAX_CONNS=10`，见 [07](07-deployment-and-operations.md) §4）、各类超时、**`EXPECTED_SCHEMA_VERSION`（构建时注入，`/ready` 校验）**、**`AUDIT_LOG_RETENTION_DAYS`（默认 30、取值 `1..3650`、启动时校验，ADR-0007 / 0008）**。密钥只存在本地环境，不进仓库（CI 的 hygiene job 拦截）。
+- 固定常量：`APP_TIMEZONE=Asia/Shanghai`、币种 `CNY`，启动时校验且**不允许按店或按请求覆盖**；业务日与单号日期的时间换算集中在 `internal/domain/`，SQL 中显式写 `AT TIME ZONE 'Asia/Shanghai'`（ADR-0004）。审计保留天数同样全局生效，不通过 API 或按店覆盖；默认 30、取值 `1..3650`、不允许关闭清理、变更需重启（见 [08](08-audit-retention.md) §1）。
 - `wire` 编译期生成装配代码，无反射、无运行时容器；`cmd/api` 与 `cmd/worker` 各自有独立的装配入口。
 - 启动顺序：校验配置 → 连通数据库并**校验迁移版本**（`/ready`）→ 注册路由 → 监听；**启动过程不执行迁移**（ADR-0007）。停机：摘流量 → 等待在途请求（有上限）→ 关闭连接池与 worker。
-- 连接池基线（对应架构评审里的超时治理）：`max_conns` 显式设置、`statement_timeout` 5 s（报表 30 s）、`idle_in_transaction_session_timeout` 10 s；禁止使用驱动默认值。
+- 连接池基线（ADR-0008 / [07](07-deployment-and-operations.md) §4）：`api` 每实例 20 × 2 + `worker` 10 × 2 + `job` 5 + 预留 15 = 80 ≤ PG `max_connections=100`；`statement_timeout` 5 s（报表 30 s）、`idle_in_transaction_session_timeout` 10 s、`lock_timeout` 3 s；禁止使用驱动默认值，扩副本先重算预算。
 
 ## 9. 测试分层
 
@@ -183,7 +185,7 @@ func (uc *Checkout) Pay(ctx context.Context, cmd PayCommand) (Result, error) {
 11. 是否引入了范围外机制：本地离线队列、补传/同步水位、打印任务、业务数据归档或保留窗口（ADR-0004 一律禁止）？
 12. 是否引入了 `ShopGroup` / `shop_group_*` / 父子门店 / 门店标签分组或按组授权（ADR-0005 一律禁止）？跨店范围是否只用可见门店集合 + 显式 `shop_ids`？
 13. 单店请求是否强制显式 `X-Shop-Id`、缺头即 `400` 且不隐式默认？是否未引入 `users.shop_id` / `shops.owner_user_id` / `current_shop` 表、切换端点，或把当前门店写进 JWT / 会话（ADR-0006）？缓存键是否含 `shop_id`，切换时是否处理在途请求？
-14. 是否引入了 R1 范围外的外部 SDK / 回调端点、只读副本与读写分离、内部往来账或自动清分（ADR-0007 一律禁止）？多副本假设下：启动时是否跑了迁移、定时任务是否加锁防重、连接池是否按副本数推导？
+14. 是否引入了 R1 范围外的外部 SDK / 回调端点、只读副本与读写分离、内部往来账或自动清分（ADR-0007 一律禁止）？多副本假设下：迁移是否只由 `cmd/job` 执行、共享状态是否全部落库、定时任务是否用「同一条 `pgx.Conn` 加锁/解锁」的 advisory lock（[07](07-deployment-and-operations.md) §4.2）、连接池是否按 2+2 预算配置？
 15. 审计日志是否只对业务请求追加写、不可改删？唯一删除路径是否为 worker 的定时清理任务（按 30 天可配窗口、分批、可重入、有指标与告警、不写回审计表）？是否误把审计清理扩展成业务数据归档（ADR-0004 / 0007）？
 
 ---
