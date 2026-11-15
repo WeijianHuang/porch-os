@@ -15,7 +15,7 @@ cp .env.example .env
 # 把 POSTGRES_PASSWORD 改成随机值，并同步修改 DATABASE_URL 中的密码
 ```
 
-`.env` 已被 `.gitignore` 忽略，绝不提交。Compose 只读取 `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `PORCH_PG_PORT`；`DATABASE_URL` 留给 R1 起接入数据库的应用进程。
+`.env` 已被 `.gitignore` 忽略，绝不提交。Compose 只从 `.env` 读取 `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `PORCH_PG_PORT`；`TZ` / `PGTZ` 与 `-c timezone` 在 Compose 里固定为 `Asia/Shanghai`，不需要也不允许按环境覆盖。`DATABASE_URL` 与 `APP_TIMEZONE` 留给 R1 起接入数据库的应用进程。
 
 ## 启动与停止
 
@@ -36,6 +36,21 @@ docker compose exec db psql -U porch -d porch -tAc 'show server_version;'
 
 docker compose exec db psql -U porch -d porch -c 'select current_database(), current_user;'
 ```
+
+## 验证业务时区（ADR-0004）
+
+全系统固定 `Asia/Shanghai`（UTC+8）；`timestamptz` 仍以 UTC 存储，这里只影响人工查库读数与默认会话时区。
+
+```bash
+docker compose exec db psql -U porch -d porch -tAc 'show timezone;'
+# 期望输出：Asia/Shanghai
+
+docker compose exec db psql -U porch -d porch -tAc \
+  "select to_char(timestamptz '2026-11-15 16:00:00+00' at time zone 'Asia/Shanghai', 'YYYY-MM-DD HH24:MI');"
+# 期望输出：2026-11-16 00:00 —— UTC 16:00 即东八区次日 0 点，是业务日与单号日期的切换点
+```
+
+从旧版 Compose 配置升级时执行 `docker compose up -d --force-recreate db` 让 `-c timezone=...` 生效；命名卷会保留，不需要重新初始化数据。
 
 宿主机连接串：
 

@@ -28,7 +28,7 @@
 
 配套约定：
 
-- 金额一律 `numeric(p, s)`，禁止浮点；时间用 `timestamptz`，统一以 UTC 存储、按门店时区展示。
+- 金额一律 `numeric(p, s)`，禁止浮点；单币种 CNY，不设 `currency` 列。时间用 `timestamptz`，统一以 UTC 存储、ISO 8601 UTC 传输，**展示、业务日与单号日期统一按 `Asia/Shanghai`（UTC+8）**，不设门店级时区——口径见 [ADR-0004](0004-scope-baseline.md)。
 - 主键用 `bigint generated always as identity`；对外单号另设唯一约束，且必须明确唯一范围是「店内唯一」还是「全局唯一」。
 - 所有业务表带 `shop_id`；高频查询的复合索引以 `shop_id` 为前导列，唯一约束同理。
 - schema 变更只走版本化的可回滚迁移文件，禁止手工改库；迁移工具、连接池与查询构建方式见 [ADR-0002](0002-go-backend-stack.md)。

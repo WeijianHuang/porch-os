@@ -16,7 +16,8 @@
 - `docs/decisions/0002-go-backend-stack.md`：后端技术栈 ADR（已接受）——Go + SQL 优先、逐项理由、代码评审阻断项与复审条件。
 - `go.mod` 与 `cmd/porch-os/`：零外部依赖的 R0 引导程序（`/health`）及单测，作为可复现的编译基线。
 - `docs/decisions/0003-shop-level-isolation.md`：隔离模型 ADR（已接受）——只有 `shop_id` 一层、禁止租户 / 组织 / 公司等上层维度、跨店共享实体的处理规则与复审条件。
-- `docs/design/00`–`06`：**前期系统架构详细设计**（设计提案，尚未冻结）——00 总览（质量属性、模块划分、数据归属三分法、7 项设计提案与 8 个开放问题）、01 领域模型与状态机、02 数据库 schema 与可执行 DDL 节选、03 接口契约与错误码、04 应用架构与依赖规则、05 横切机制、06 六条关键流程时序与测试清单。
+- `docs/design/00`–`06`：**前期系统架构详细设计**（设计提案，尚未冻结）——00 总览（质量属性、模块划分、数据归属三分法、7 项设计提案与 8 个开放问题）、01 领域模型与状态机、02 数据库 schema 与可执行 DDL 节选、03 接口契约与错误码、04 应用架构与依赖规则、05 横切机制、06 六条关键流程时序与测试清单。（其中 4 个开放问题随后由 ADR-0004 关闭，见下方「变更」。）
+- `docs/decisions/0004-scope-baseline.md`：业务范围基线 ADR（已接受）——单币种 CNY、统一东八区、暂不归档、不支持打印、不支持离线收银；含备选方案、理由、边界澄清与复审条件。
 
 ### 变更
 
@@ -30,3 +31,5 @@
 - 前端框架、API 客户端、组件库与 E2E 工具仍待定，由 `porch-console` 独立决策。
 - README 与 `ARCHITECTURE.md` 增加详细设计导航（新增第 10 节）；`porch-console` 的错误重试约定改为按响应体 `error.retryable` 判定，并指向 `03-api-design.md`。
 - `docs/design/02` 的核心 DDL 节选已在本地 PostgreSQL 18.7 容器事务中实测通过并回滚，未污染 `public` schema。
+- **关闭 4 项开放问题并全量同步设计口径（ADR-0004）**：`00` 第 8 节拆成「已确认 / 仍待确认」，OQ-01、OQ-02、OQ-03 打印部分、OQ-06 标记已决；`01` 的 `Money` 去掉币种、`Order` 去掉 `currency`、新增 `BusinessDay` 值对象与 3 条不变量；`02` 去掉 `shops.timezone` 与 `orders.currency` 列、单号日期改 `AT TIME ZONE 'Asia/Shanghai'`、第 7 节由「归档与容量」改为「容量与保留策略（暂不归档）」；`03` 补币种/时区约定与「范围排除清单」；`04` 固定 `APP_TIMEZONE=Asia/Shanghai` 并新增评审检查项；`05` 新增 4.1「在线强一致」、明确运行期清理不等于归档、导出不触发打印；`06` 补共同前提与 UTC+8 日界测试。`ARCHITECTURE.md` 第 2.1、4、5、8、9、10 节与 README 的边界、决策状态、导航同步；ADR-0001 / 0002 / 0003 中过期的时区、打印、归档表述一并订正，PR 模板与 `CONTRIBUTING.md` 增加范围基线自查。
+- **`docker-compose.yml` 与本地环境对齐东八区**：容器 `TZ` / `PGTZ` 与 PostgreSQL `timezone` 均设为 `Asia/Shanghai`；`timestamptz` 仍以 UTC 存储，仅影响人工查库读数与默认会话时区。`.env.example` 增加 `APP_TIMEZONE` 固定值说明，`LOCAL-DEV.md` 增加时区验证命令。

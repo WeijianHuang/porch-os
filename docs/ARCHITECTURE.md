@@ -1,6 +1,6 @@
 # 架构原则
 
-> 状态：早期工程阶段。数据库已定为 **PostgreSQL 18.7**（[ADR-0001](decisions/0001-postgresql-18.md)），后端技术栈已定为 **Go + SQL 优先**（[ADR-0002](decisions/0002-go-backend-stack.md)），数据隔离模型已由 [ADR-0003](decisions/0003-shop-level-isolation.md) 锁定为**仅门店层**。隔离模型见第 2.0 节，数据层落地见第 2.1 节，技术栈落地见第 8 节。前端框架由 `porch-console` 独立决策。前期系统架构详细设计见 [`design/00-overview.md`](design/00-overview.md)（设计提案，尚未冻结）。后续模块级选型继续以 ADR 记录并回写本文。
+> 状态：早期工程阶段。数据库已定为 **PostgreSQL 18.7**（[ADR-0001](decisions/0001-postgresql-18.md)），后端技术栈已定为 **Go + SQL 优先**（[ADR-0002](decisions/0002-go-backend-stack.md)），数据隔离模型已由 [ADR-0003](decisions/0003-shop-level-isolation.md) 锁定为**仅门店层**，业务范围基线已由 [ADR-0004](decisions/0004-scope-baseline.md) 锁定为**单币种 CNY / 统一 UTC+8 / 暂不归档 / 不打印 / 不离线**。隔离模型见第 2.0 节，数据层落地见第 2.1 节，技术栈落地见第 8 节。前端框架由 `porch-console` 独立决策。前期系统架构详细设计见 [`design/00-overview.md`](design/00-overview.md)（设计提案，尚未冻结）。后续模块级选型继续以 ADR 记录并回写本文。
 
 ## 1. 术语表
 
@@ -45,8 +45,10 @@
 |---|---|
 | 门店维度 | 业务表一律带 `shop_id`，它是唯一隔离维度；复合索引与唯一约束以 `shop_id` 为前导列 |
 | 唯一性范围 | 单号、流水号的唯一约束必须写明是「店内唯一」还是「全局唯一」，不能靠应用层拼接；不存在「租户内唯一」 |
-| 金额 | `numeric(p, s)`，禁止浮点类型；应用层用定点十进制 |
-| 时间 | `timestamptz`，统一 UTC 存储、按门店时区展示 |
+| 金额 | `numeric(p, s)`，禁止浮点类型；应用层用定点十进制；**单币种 CNY，不设 `currency` 列、不存汇率** |
+| 时间 | `timestamptz` 统一 UTC 存储、ISO 8601 UTC 传输；**展示、业务日与单号日期统一 `Asia/Shanghai`（UTC+8）**，不设门店级时区 |
+| 业务日 | `(occurred_at AT TIME ZONE 'Asia/Shanghai')::date` + 门店营业日切点偏移；日报、班次、汇总、导出共用这一口径 |
+| 数据保留 | **暂不归档**：业务数据在线全量保留，不设保留窗口、不分区；仅清理幂等键、已投递事件、导出临时文件等运行期数据 |
 | 主键 | `bigint generated always as identity`；对外单号与内部主键分开 |
 | 变更 | 只走版本化的可回滚迁移文件（goose 执行、atlas 查漂移），禁止手工改库 |
 | 计算口径 | 不把业务逻辑放进数据库视图；复杂口径写在受版本控制的 SQL 中 |
@@ -80,10 +82,12 @@
 | 后台任务 | 独立进程、幂等、失败重试并进入死信队列；不在请求处理器里跑长任务 |
 | 报表导出 | 流式写出，禁止把整个文件读进内存后再返回 |
 | 超时 | 所有外部调用与数据库查询接受 context，客户端断开后服务端计算必须终止 |
+| 在线与外设 | **不支持离线收银与打印**（[ADR-0004](decisions/0004-scope-baseline.md)）：不建本地队列、补传、冲突合并、打印任务或设备适配；文件导出保留 |
 
 ## 5. 接口与前端集成
 
 - 接口风格为 **REST + OpenAPI**，契约由注释生成并保持可 diff；契约变更需同步 `porch-console`。
+- 金额（CNY）与时区（UTC+8）由 [ADR-0004](decisions/0004-scope-baseline.md) 全局固定：接口不带币种字段、不接受时区参数；文件导出可用，打印端点不存在。
 - 错误响应统一结构（错误码、可读消息、request id），便于前端映射文案。
 - 列表接口统一分页参数与返回形状；排序字段走白名单。
 - CORS 使用显式来源白名单，生产禁用通配符。
@@ -108,7 +112,7 @@
 | 应用 | 自建 Unit of Work，`*sql.Tx` 挂在 context 上，事务边界显式可见 |
 | 领域 | 纯函数与值对象；一对多折叠逻辑放在 `internal/domain/`，可脱离 DB 单测 |
 | 数据访问 | sqlc 管静态 SQL、squirrel 管动态筛选（**必须 `PlaceholderFormat(squirrel.Dollar)`**）、pgx/v5 管连接与类型映射 |
-| 金额 | shopspring/decimal ↔ PG `numeric`，禁止 `float64` |
+| 金额 | shopspring/decimal ↔ PG `numeric`，禁止 `float64`；单币种 CNY，无币种字段与汇率 |
 | 缓存 | Redis（跨实例）+ ristretto（进程内），带 TTL、写后失效 |
 | 可观测性 | slog JSON 日志 + Prometheus 指标 + OpenTelemetry 链路 |
 | 测试 | 领域逻辑纯函数单测；集成测试用 testcontainers-go 起真实 PG，不 mock 服务层 |
@@ -125,6 +129,7 @@ R0 引导骨架仅用标准库提供 `/health`，零外部依赖；上表依赖�
 - [0001 · 数据库选用 PostgreSQL 18.7](decisions/0001-postgresql-18.md)
 - [0002 · 后端技术栈选用 Go + SQL 优先](decisions/0002-go-backend-stack.md)
 - [0003 · 数据隔离只按门店层，不引入租户层](decisions/0003-shop-level-isolation.md)
+- [0004 · 业务范围基线：单币种、东八区、暂不归档、不打印、不离线](decisions/0004-scope-baseline.md)
 
 后续选型在 `docs/decisions/` 下按 `NNNN-标题.md` 递增记录，模板：
 
@@ -148,10 +153,10 @@ R0 引导骨架仅用标准库提供 `/health`，零外部依赖；上表依赖�
 |---|---|
 | [00 总览](design/00-overview.md) | 质量属性与可验收目标、系统上下文、模块划分、数据归属三分法、设计提案与开放问题 |
 | [01 领域模型](design/01-domain-model.md) | 聚合边界、状态机、金额与单号值对象、领域事件、通用化扩展点 |
-| [02 数据库设计](design/02-database-design.md) | 表清单、类型与命名约定、可执行 DDL 节选、复合外键与索引策略、迁移与归档 |
+| [02 数据库设计](design/02-database-design.md) | 表清单、类型与命名约定、可执行 DDL 节选、复合外键与索引策略、迁移与容量保留 |
 | [03 接口设计](design/03-api-design.md) | 统一响应与错误码、门店上下文、幂等、端点清单、契约冻结 |
 | [04 应用架构](design/04-application-architecture.md) | 目录结构、依赖规则、Unit of Work、中间件链、DI 与测试分层 |
 | [05 横切机制](design/05-cross-cutting.md) | 认证授权、幂等、并发、Outbox、报表三层读模型、可观测性与安全基线 |
 | [06 关键流程](design/06-key-flows.md) | 开单结账、退款、跨店核销、库存调拨、报表导出、授权即时生效 |
 
-该套文档是**设计提案、尚未冻结**，以本文与三份 ADR 为上游约束。冻结后，任何改动 schema、唯一性范围、隔离条件、状态机或错误语义的 PR 必须同步更新对应分册。
+该套文档是**设计提案、尚未冻结**，以本文与四份 ADR 为上游约束。冻结后，任何改动 schema、唯一性范围、隔离条件、状态机或错误语义的 PR 必须同步更新对应分册。

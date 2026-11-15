@@ -1,6 +1,6 @@
 # 前期系统架构详细设计 · 02 数据库设计
 
-> 上游：[01 领域模型](01-domain-model.md)（聚合与不变量）、[ADR-0001](../decisions/0001-postgresql-18.md)（PostgreSQL 18.7）、[ADR-0003](../decisions/0003-shop-level-isolation.md)（只有 `shop_id`）。
+> 上游：[01 领域模型](01-domain-model.md)（聚合与不变量）、[ADR-0001](../decisions/0001-postgresql-18.md)（PostgreSQL 18.7）、[ADR-0003](../decisions/0003-shop-level-isolation.md)（只有 `shop_id`）、[ADR-0004](../decisions/0004-scope-baseline.md)（单币种、东八区、暂不归档）。
 > 本文给的是**设计定稿用的 schema 形状**。第 3 节 DDL 是依赖自洽、可在 PG 18.7 上直接执行的**核心表节选**（不含全部表、不含完整 `Down`）；真实迁移文件从 R1 起放 `migrations/`，由 goose 执行。
 
 ## 1. 全局约定
@@ -10,10 +10,12 @@
 | 方言 | PostgreSQL 18.7，只用它原生能力 | 不写兼容层、不做方言抽象 |
 | 库结构 | 单库、单 schema | ADR-0003：没有租户层、没有 schema-per-shop |
 | 命名 | 表名复数小写下划线，索引 `idx_<表>_<列>`，唯一约束 `uq_<表>_<列>`，外键 `fk_<表>_<列>` | 可 grep、可生成 |
-| 主键 | `bigint GENERATED ALWAYS AS IDENTITY` | 内部主键不外露，便于归档与重编号 |
+| 主键 | `bigint GENERATED ALWAYS AS IDENTITY` | 内部主键不外露，便于迁移与重编号；暂不归档，无需预留归档主键段 |
 | 对外标识 | `public_id uuid NOT NULL DEFAULT uuidv7()`，单独唯一约束 | 时间有序、可安全按创建顺序排序；PG 17 降级时改应用层生成 |
-| 金额 | `numeric(14,2)`；数量 `numeric(14,3)` | 禁止 `float` / `double precision`；应用层用定点十进制 |
+| 金额 | `numeric(14,2)`；数量 `numeric(14,3)` | 禁止 `float` / `double precision`；**单一币种 CNY，不设 `currency` 列、不存汇率**（ADR-0004） |
 | 时间 | `timestamptz`，UTC 存储；区间一律半开 `[start, end)` | 避免 `BETWEEN` 边界重复计数 |
+| 业务日 | `(occurred_at AT TIME ZONE 'Asia/Shanghai')::date` + 门店营业日切点偏移 | 全系统固定 UTC+8，**不设门店级 `timezone` 列**、不接受客户端时区参数（ADR-0004）；日报、班次、单号日期、导出共用 |
+| 保留 | 业务数据在线全量保留 | 暂不归档、不设保留窗口、不分区；详见第 7 节 |
 | 枚举 | `text + CHECK`，不建 PG `ENUM` 类型 | 取值变更走迁移，不需要 `ALTER TYPE` |
 | JSON | `jsonb + 默认 '{}'`，只放非查询维度属性 | 需要检索的字段必须独立成列 |
 | 审计字段 | `created_at`、`updated_at`、`created_by`、`version` | `version` 用于乐观锁 |
@@ -31,7 +33,7 @@
 | shop | `shops` | A | 门店主表，`id` 即 `shop_id` | `code` 全局唯一 |
 | shop | `shop_groups` | A | 店群标签 | `code` 全局唯一 |
 | shop | `shop_group_members` | C | 门店 ↔ 店群 | `(shop_group_id, shop_id)` |
-| shop | `shop_settings` | B | 门店参数（时区、营业日切点等） | `(shop_id, key)` |
+| shop | `shop_settings` | B | 门店参数（营业日切点等）；基准时区全局固定，不按店配置 | `(shop_id, key)` |
 | identity | `users` | A | 账号 | `login` 全局唯一 |
 | identity | `roles` / `permissions` | A | 角色与权限点 | `code` 全局唯一 |
 | identity | `role_permissions` | C | 角色 ↔ 权限 | `(role_id, permission_id)` |
@@ -76,7 +78,8 @@ CREATE TABLE shops (
   public_id    uuid        NOT NULL DEFAULT uuidv7(),
   code         text        NOT NULL,
   name         text        NOT NULL,
-  timezone     text        NOT NULL DEFAULT 'UTC',
+  -- 基准时区为全局常量 Asia/Shanghai（ADR-0004），不设门店级 timezone 列；
+  -- 营业日切点等业务参数放 shop_settings。
   status       text        NOT NULL DEFAULT 'active',
   created_at   timestamptz NOT NULL DEFAULT now(),
   updated_at   timestamptz NOT NULL DEFAULT now(),
@@ -132,14 +135,15 @@ CREATE TABLE orders (
   id               bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   shop_id          bigint      NOT NULL REFERENCES shops(id),
   public_id        uuid        NOT NULL DEFAULT uuidv7(),
+  -- 单号日期按 UTC+8，与业务日口径一致；不依赖数据库会话时区
   order_no         text        NOT NULL DEFAULT
-                     ('SO' || to_char(now() AT TIME ZONE 'UTC', 'YYYYMMDD') || '-' ||
+                     ('SO' || to_char(now() AT TIME ZONE 'Asia/Shanghai', 'YYYYMMDD') || '-' ||
                       lpad(nextval('order_no_seq')::text, 10, '0')),
   status           text        NOT NULL DEFAULT 'draft',
   member_id        bigint      REFERENCES members(id),
   shift_id         bigint,
   operator_id      bigint      NOT NULL,
-  currency         char(3)     NOT NULL DEFAULT 'CNY',
+  -- 单一币种 CNY（ADR-0004）：金额列不带 currency，不做币种校验与换算
   total_amount     numeric(14,2) NOT NULL DEFAULT 0,
   discount_amount  numeric(14,2) NOT NULL DEFAULT 0,
   paid_amount      numeric(14,2) NOT NULL DEFAULT 0,
@@ -237,6 +241,7 @@ CREATE INDEX idx_outbox_unpublished ON outbox_events (occurred_at, id)
 
 CREATE TABLE daily_shop_summary (
   shop_id        bigint      NOT NULL REFERENCES shops(id),
+  -- business_date 由 UTC+8 + 门店营业日切点推导，是全系统唯一口径
   business_date  date        NOT NULL,
   order_count    integer     NOT NULL DEFAULT 0,
   gross_amount   numeric(14,2) NOT NULL DEFAULT 0,
@@ -250,7 +255,7 @@ CREATE TABLE daily_shop_summary (
 -- 按依赖逆序 DROP；此处省略，真实迁移文件必须完整给出
 ```
 
-**为什么单号这样设计**：单号由数据库序列生成 + `(shop_id, order_no)` 唯一约束双保险。任何「应用层用日期 + 门店 ID + 计数器拼字符串」的做法，在并发下都会重复，且没有数据库兜底；这类缺陷一旦产生脏数据，事后补唯一约束会失败。
+**为什么单号这样设计**：单号由数据库序列生成 + `(shop_id, order_no)` 唯一约束双保险。任何「应用层用日期 + 门店 ID + 计数器拼字符串」的做法，在并发下都会重复，且没有数据库兜底；这类缺陷一旦产生脏数据，事后补唯一约束会失败。日期部分显式写 `AT TIME ZONE 'Asia/Shanghai'`，与业务日一致，也不随部署环境的会话时区漂移。
 
 ## 4. 用数据库约束兜住隔离
 
@@ -271,7 +276,7 @@ CREATE TABLE daily_shop_summary (
 | 单店单据列表 | `(shop_id, created_at DESC)` 部分索引 `WHERE deleted_at IS NULL` | 分页用 keyset，不用深 `OFFSET` |
 | 单店按状态筛选 | `(shop_id, status, created_at DESC)` | 状态选择性低，靠前导 `shop_id` 收敛 |
 | 单据明细 | `(shop_id, order_id)` | 复合外键自带 |
-| 日报 / 经营分析 | `daily_shop_summary (shop_id, business_date)` 主键；明细回查 `(shop_id, created_at)` | 报表先走汇总表，不走大表实时扫 |
+| 日报 / 经营分析 | `daily_shop_summary (shop_id, business_date)` 主键；明细回查 `(shop_id, created_at)` | 报表先走汇总表，不走大表实时扫；`business_date` 按 UTC+8 口径，跨营业日切点的记录归入同一天 |
 | 会员余额流水 | `(shop_id, member_id, created_at DESC)` | 按店账，不跨店混算 |
 | 库存流水 | `(shop_id, catalog_item_id, created_at DESC)` | 同上 |
 | 待派发事件 | `outbox_events (occurred_at, id) WHERE published_at IS NULL` | 部分索引，随投递完成自动缩小 |
@@ -287,12 +292,14 @@ CREATE TABLE daily_shop_summary (
 4. 加唯一约束前必须先在预发布环境跑重复数据检查，否则迁移会中途失败。
 5. 大表加索引用 `CONCURRENTLY`，失败会留下 `INVALID` 索引，需有清理脚本。
 
-## 7. 归档与容量
+## 7. 容量与保留策略（ADR-0004：暂不归档）
 
-- **R1 不做分区**：PG 声明式分区要求唯一约束包含分区键，会与「`(shop_id, order_no)` 店内唯一」及复合外键设计冲突；先靠索引与汇总表扛住，数据量达到阈值再另立 ADR 评估分区方案。
-- 在线保留窗口默认 24 个月（[OQ-02](00-overview.md#8-开放问题需确认后才进入实现)）；更早数据按 `shop_id` + 业务日期导出到归档表或对象存储，归档数据不参与在线报表，但可通过显式的历史查询接口访问。
-- 只追加的流水表（`balance_ledger`、`stock_movements`、`audit_logs`、`outbox_events`）按时间清理；`outbox_events` 已投递且超过保留期的行定期删除，未投递的永不删除。
-- 汇总表 `daily_shop_summary` 是**派生数据**：允许从流水全量重算，重算结果必须与源一致；这是报表可信度的基础。
+- **业务数据在线全量保留**：单据、支付、余额与库存流水、审计日志不设保留年限、不导出历史归档、不做冷热分离，也不提供「归档数据专用查询」路径。原 OQ-02 的「在线 24 个月 + 归档」假设已废弃。
+- **不做分区**：PG 声明式分区要求唯一约束包含分区键，会与「`(shop_id, order_no)` 店内唯一」及复合外键设计冲突；在没有归档需求时，分区只增加迁移与维护复杂度。容量靠索引、预聚合、keyset 分页与流式导出扛住。
+- **运行期数据仍要清理**（这不是业务归档）：`idempotency_keys` 过期键（24 h）、已投递且超期的 `outbox_events`、导出任务的临时文件；未投递事件永不删除。业务单据与流水**不参与**任何定期删除。
+- **监控与复审**：表/索引体积、大表 `Seq Scan` 比例、慢查询数、库体积是必配指标；容量阈值在 R1 压测后写入运维清单。达到阈值时**另立 ADR** 再评估分区或归档，不在代码里悄悄加保留窗口。
+- 汇总表 `daily_shop_summary` 是**派生数据**：允许从流水全量重算，重算结果必须与源一致；这是报表可信度的基础，与归档无关。
+- **不设范围外表**：不做离线收银与打印（ADR-0004），因此不存在本地待同步单据、补传队列、同步水位、打印任务/模板表；`export_jobs` 只服务于文件导出。
 
 ## 8. 数据层测试
 
@@ -300,7 +307,8 @@ CREATE TABLE daily_shop_summary (
 |---|---|
 | 迁移测试 | 在真实 PG 18.7 容器里跑 `up` → `down` → `up`，断言无残留对象 |
 | 约束测试 | 并发插入相同单号断言唯一约束生效；插入跨店明细断言复合外键拒绝 |
-| 精度测试 | 大额与分摊场景断言 `numeric` 无舍入漂移 |
+| 精度测试 | 大额与分摊场景断言 `numeric` 无舍入漂移；断言金额列不存在 `currency` 字段与浮点类型 |
+| 业务日测试 | 在 UTC+8 日界（UTC 16:00）前后各插入一条，断言归入正确的 `business_date`，且单号日期与之一致 |
 | 隔离测试 | 用两个门店、两个用户交叉请求，断言任一响应不含对方门店数据 |
 | 计划测试 | 关键查询 `EXPLAIN` 存档，断言不出现大表 `Seq Scan` |
 

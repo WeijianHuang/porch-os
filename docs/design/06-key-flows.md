@@ -1,6 +1,6 @@
 # 前期系统架构详细设计 · 06 关键流程
 
-> 上游：[01 领域模型](01-domain-model.md)（状态机、不变量）、[02 数据库设计](02-database-design.md)（约束）、[03 接口设计](03-api-design.md)（错误码）、[05 横切机制](05-cross-cutting.md)（幂等、Outbox、报表读模型）。
+> 上游：[01 领域模型](01-domain-model.md)（状态机、不变量）、[02 数据库设计](02-database-design.md)（约束）、[03 接口设计](03-api-design.md)（错误码）、[05 横切机制](05-cross-cutting.md)（幂等、Outbox、报表读模型）、[ADR-0004](../decisions/0004-scope-baseline.md)（范围基线）。
 > 本册把前五册的约定串成端到端时序，是集成测试与用例评审的清单来源。
 
 ## 0. 所有流程的共同前提
@@ -12,6 +12,9 @@
 | 每条 SQL 显式带 `shop_id`；跨模块只通过用例层与 ID 协作 | [00 第 5 节](00-overview.md) |
 | 状态迁移一律走 `CanTransition` 纯函数；金额计算一律是领域层纯函数 | [01 第 5、6 节](01-domain-model.md) |
 | 事务内不做外部 IO；通知、汇总、导出都在事务外由 worker 完成 | [04 第 5 节](04-application-architecture.md) |
+| 金额一律 CNY 且不带币种字段；业务日、单号日期按 UTC+8（`Asia/Shanghai`） | [ADR-0004](../decisions/0004-scope-baseline.md) |
+| **全程在线**：无本地队列、无离线提交、无补传；网络失败不放行写入 | [05 第 4.1 节](05-cross-cutting.md) |
+| 业务数据在线全量保留：流程里没有归档、保留窗口裁剪与打印步骤 | [02 第 7 节](02-database-design.md) |
 
 ```
 Client ──► API 中间件 ──► Usecase ──► Domain(纯函数) ──► Repo ──► PostgreSQL
@@ -68,7 +71,7 @@ Client ──► API 中间件 ──► Usecase ──► Domain(纯函数) ─
 | j | 写 `outbox_events`：`order.paid`、`payment.succeeded`、`shop.summary_dirty` | 事务外派发 |
 | k | `COMMIT` | — |
 
-事务外：worker 领取事件 → 派发订阅者 → 按 `(shop_id, business_date)` 幂等重算 `daily_shop_summary`。
+事务外：worker 领取事件 → 派发订阅者 → 按 `(shop_id, business_date)` 幂等重算 `daily_shop_summary`；`business_date` 由 `created_at` 按 UTC+8 与门店营业日切点推导，不依赖数据库会话时区。
 
 **失败分支表**
 
@@ -122,8 +125,8 @@ paid ──► refunding ──► refunded（全额）
 
 1. 请求经 shop scope 校验；`scope=all` 额外校验 `report.cross_shop` 并把 `shop_ids` 与可见集合求交。
 2. 当日 / 短区间 → L1 主库条件聚合（5 s 超时，命中 `(shop_id, created_at)`）。
-3. 历史 / 跨店对比 → L2 `daily_shop_summary`，响应带 `recomputed_at` 说明数据截至时间。
-4. 复杂口径走 `derived/*.sql`（CTE / `FILTER`），不建视图；`EXPLAIN` 计划存档。
+3. 历史 / 跨店对比 → L2 `daily_shop_summary`，响应带 `recomputed_at` 说明数据截至时间；业务日统一按 UTC+8。
+4. 复杂口径走 `derived/*.sql`（CTE / `FILTER`），不建视图；`EXPLAIN` 计划存档。业务数据暂不归档，查询范围不受保留窗口裁剪。
 
 **导出（L3）**
 
@@ -138,7 +141,7 @@ worker 领取 ──► keyset 游标分批读取 ──► StreamWriter 逐行�
 GET /exports/{id}/download ──► 流式下载
 ```
 
-硬约束：不收集全量结果到 slice、不深 `OFFSET`、不把文件先读进内存再返回；常驻内存与结果集大小无关。导出范围按 `shop_id` 组织，跨店导出需显式授权且结果按店分列，不把不同门店混进同一行。
+硬约束：不收集全量结果到 slice、不深 `OFFSET`、不把文件先读进内存再返回；常驻内存与结果集大小无关。导出范围按 `shop_id` 组织，跨店导出需显式授权且结果按店分列，不把不同门店混进同一行。导出只产出文件下载，**不触发打印**（ADR-0004）。
 
 ## F-06 授权变更即时生效
 
@@ -157,7 +160,7 @@ GET /exports/{id}/download ──► 流式下载
 | F-02 | 全额、部分退款 | 退款额恰好等于上限 | 超额退款、对未支付单退款 | 重复退款请求 |
 | F-03 | 充值、本店消费、跨店核销 | 余额恰好用尽 | 会员不存在、门店不在可见集合、无跨店权限 | 并发充值同一会员 |
 | F-04 | 扣减、调整、调拨 | 库存恰好扣到 0 | 负库存、调拨到无权门店 | 并发扣减同一商品 |
-| F-05 | 单店日报、跨店汇总、导出 | 空结果、跨营业日边界 | 越权 `scope=all`、导出中途失败 | 重复创建导出任务 |
+| F-05 | 单店日报、跨店汇总、导出 | 空结果、UTC+8 日界（UTC 16:00）前后、跨营业日切点 | 越权 `scope=all`、导出中途失败 | 重复创建导出任务 |
 | F-06 | 授权后立即生效 | 恰好只剩一家可见门店 | 撤销后访问旧门店 | 授权变更与在途请求并发 |
 
 **每条写用例强制重放一次幂等键并断言副作用只发生一次**；每条隔离用例用两家店 + 两个用户交叉请求，断言响应中不出现对方门店数据。
@@ -175,4 +178,4 @@ GET /exports/{id}/download ──► 流式下载
 
 ---
 
-返回 [00 总览](00-overview.md) 查看分册地图与开放问题清单。
+返回 [00 总览](00-overview.md) 查看分册地图、已确认决议与剩余开放问题清单。

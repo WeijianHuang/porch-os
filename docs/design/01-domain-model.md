@@ -1,6 +1,6 @@
 # 前期系统架构详细设计 · 01 领域模型
 
-> 上游：[00 总览](00-overview.md) 第 4–5 节（模块划分、数据归属三分法）、[ADR-0003](../decisions/0003-shop-level-isolation.md)。
+> 上游：[00 总览](00-overview.md) 第 4–5 节（模块划分、数据归属三分法）、[ADR-0003](../decisions/0003-shop-level-isolation.md)、[ADR-0004](../decisions/0004-scope-baseline.md)（单币种、东八区、暂不归档、不打印、不离线）。
 > 本文定义「业务上什么必须成立」，不定义表结构（见 [02](02-database-design.md)）与接口形状（见 [03](03-api-design.md)）。
 
 ## 1. 建模原则
@@ -52,9 +52,9 @@
 | `status` | 状态机取值 | 见第 5 节 |
 | `shift_id` / `operator_id` | 班次 / 操作人 | 只持 ID |
 | `member_id` | 关联会员（可空） | 只持 ID，不嵌会员对象 |
-| `currency` / `total_amount` / `paid_amount` / `discount_amount` | 金额 | 定点十进制；`total = Σ(line) − Σ(adjustment)` |
+| `total_amount` / `paid_amount` / `discount_amount` | 金额（一律 CNY） | 定点十进制 `numeric(14,2)`；不带币种字段；`total = Σ(line) − Σ(adjustment)` |
 | `version` | 乐观锁版本 | 每次更新 `+1`，更新带 `WHERE version = $n` |
-| `created_at` / `updated_at` | 时间 | UTC `timestamptz` |
+| `created_at` / `updated_at` | 时间 | UTC `timestamptz`；展示按 `Asia/Shanghai`；业务日由 `created_at` 按统一口径推导 |
 
 **`OrderLine`**：`order_id`、`catalog_item_id`（只持 ID）、`quantity`、`unit_price`、`amount`、`line_no`。明细不随目录价格变动而回溯改写——下单时快照价格。
 
@@ -77,7 +77,7 @@ draft ──► open ──► pending_payment ──► paid ──► complete
 | `draft → open` | 开单 | 写明细、锁库存 |
 | `open → pending_payment` | 提交结账 | 计价纯函数、生成应付 |
 | `pending_payment → paid` | 全部支付成功 | 写支付流水、扣库存、改汇总脏标记、发 `order.paid` |
-| `paid → completed` | 日结 | 归档汇总 |
+| `paid → completed` | 日结 | 封账并触发当日汇总重算（业务数据不归档，ADR-0004） |
 | `paid → refunding → refunded` | 发起退款 | 写退款单、回滚库存与余额 |
 | 任意未支付态 → `cancelled` | 取消 | 释放库存 |
 
@@ -98,12 +98,15 @@ draft ──► open ──► pending_payment ──► paid ──► complete
 
 | 值对象 | 定义 | 规则 |
 |---|---|---|
-| `Money` | `{currency, amount decimal}` | 禁止 `float64`；算术用定点十进制；`scale = 2`、`ROUND_HALF_UP`；比较前先校验币种一致 |
+| `Money` | `{amount decimal}`，币种为系统级常量 CNY | 禁止 `float64`；算术用定点十进制；`scale = 2`、`ROUND_HALF_UP`；**不带币种字段、不做币种校验与换算**（ADR-0004） |
 | `public_id` | 时间有序 UUID（PG 18 内置 `uuidv7()`） | 对外暴露、可安全排序；降级到 PG 17 时由应用层生成（ADR-0002 联动条款） |
-| `order_no` | 人类可读单号 | **店内唯一**，格式与序号由数据库约束保证，不靠应用层拼接日期与门店 ID |
+| `order_no` | 人类可读单号 | **店内唯一**，日期部分按 UTC+8；序号由数据库序列保证，不靠应用层拼接日期与门店 ID |
 | `IdempotencyKey` | `{scope, key, request_hash}` | `scope` 含主体与门店；相同 key + 不同 hash → 冲突错误，不静默复用结果 |
 | `ShopScope` | 当前主体可见的门店 ID 集合 | 由认证主体推导，客户端传参只能做「集合内选择」，不能扩大集合 |
 | `TimeRange` | 半开区间 `[start, end)` | 统一 UTC，避免 `BETWEEN` 的边界重复计数 |
+| `BusinessDay` | `(occurred_at AT TIME ZONE 'Asia/Shanghai')::date` 再按门店营业日切点偏移 | 全系统唯一口径；日报、班次、汇总、导出共用；基准时区固定 UTC+8，不接受客户端或门店时区参数（ADR-0004） |
+
+> 金额与时间的口径收窄后，领域层不再需要任何汇率、时区表或换算函数；`internal/domain/` 保持零外部依赖。
 
 **计价与分摊**：整单折扣、抹零、优惠都要按明细分摊到行，纯函数 `Allocate(total, weights)` 保证「分摊之和恒等于总额」。余数按固定顺序（明细 `line_no` 升序）落到最后一项，保证相同输入永远得到相同结果，可表驱动测试。
 
@@ -128,7 +131,7 @@ Porch OS 只提供**通用多店经营底座**，不内置任何行业专属规�
 |---|---|---|
 | 目录类型 | `catalog_item.type` + `attributes jsonb` | 区分实物商品与服务项，附加自定义属性 |
 | 价格规则 | 领域层 `PricingRule` 接口；内置只有「基础价 / 按店覆盖 / 整单折扣」 | 更复杂的计价由扩展模块实现该接口 |
-| 事件订阅 | 订阅第 7 节事件，写**扩展表** | 统计、外部设备、行业专属口径 |
+| 事件订阅 | 订阅第 7 节事件，写**扩展表** | 统计、行业专属口径（打印设备不在范围内，ADR-0004） |
 
 **硬约束**：扩展表同样必带 `shop_id`；扩展模块不得直接读写核心业务表、不得绕过用例层注入的 shop scope、不得新增上层隔离维度（ADR-0003）。行业专属规则进扩展模块，不进 `internal/domain/` 的核心包。
 
@@ -142,8 +145,10 @@ Porch OS 只提供**通用多店经营底座**，不内置任何行业专属规�
 6. 状态迁移只能通过 `CanTransition` 纯函数，且与写入同事务。
 7. 全局实体（会员档案、目录项）不带 `shop_id`，其副作用数据一律带。
 8. 领域层不 import 适配器、平台包，也不直接执行 SQL。
-9. 金额路径不出现浮点类型；跨币种运算必须先校验币种一致（OQ-01 默认单币种）。
+9. 金额路径不出现浮点类型；单币种 CNY 下不出现 `currency` 字段、汇率或币种一致性校验（OQ-01 已由 ADR-0004 关闭）。
 10. 任何跨店动作都显式声明，且发生在当前主体可见门店集合之内。
+11. 业务日与单号日期一律按 UTC+8 推导；`AT TIME ZONE` 必须显式写 `'Asia/Shanghai'`，不依赖会话默认时区。
+12. 所有写操作在线同步完成；不存在本地队列、离线单据或补传合并路径（ADR-0004）。
 
 ---
 
