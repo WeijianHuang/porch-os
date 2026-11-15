@@ -1,0 +1,34 @@
+name: skeleton-check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  skeleton:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # TODO: 技术栈确定后，把本 job 替换为真实的 lint / test / build。
+      # 在此之前先保证骨架完整，并阻止密钥与真实数据误入库。
+      - name: Required files
+        run: |
+          test -f README.md
+          test -f LICENSE
+          test -f .gitignore
+          test -f .env.example
+          test -f CONTRIBUTING.md
+
+      - name: No secrets or real data committed
+        run: |
+          matches=$(git ls-files \
+            | grep -v -E '(^|/)\.env\.example$' \
+            | grep -E '(^|/)(\.env$|\.env\..+|.*\.pem$|.*\.key$|.*\.p12$|.*\.dump$|.*\.sql\.gz$|backups/|snapshots/|secrets/)' || true)
+          if [ -n "$matches" ]; then
+            echo "::error::发现疑似密钥或真实数据文件被提交："
+            echo "$matches"
+            exit 1
+          fi
+          echo "OK: no secrets or data exports tracked"

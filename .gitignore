@@ -1,0 +1,38 @@
+# 环境变量与密钥：绝不提交
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials*
+service-account*.json
+
+# 数据导出与备份：可能含真实经营数据
+*.dump
+*.sql.gz
+*.bak
+backups/
+snapshots/
+data/
+tmp/
+
+# 注意：数据库迁移用的 .sql 属于源码，不在此忽略；只忽略导出与备份产物。
+
+# 构建与运行产物
+build/
+dist/
+bin/
+out/
+*.log
+coverage/
+.cache/
+
+# 编辑器与操作系统
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
