@@ -137,6 +137,26 @@ CHANGELOG.md        变更记录
 
 `internal/` 将在 R1 按领域层 / 应用层 / 接口层 / 数据访问层建立，依赖方向见架构文档。
 
+## R1 quick start
+
+Prerequisites: Go 1.23+ and a running PostgreSQL 18.7 (`docker compose up -d db`).
+
+```bash
+cp .env.example .env          # set DATABASE_URL / JWT_SECRET / EXPECTED_SCHEMA_VERSION=2
+go run ./cmd/job migrate      # the ONLY process allowed to change the schema
+SEED_LOGIN=admin SEED_PASSWORD=<local-password> go run ./cmd/job seed-user
+go run ./cmd/api              # /health and /ready on PORT (default 8080)
+```
+
+Smoke check: `POST /api/v1/auth/login` with `Idempotency-Key`, then use the
+returned bearer token with `X-Shop-Id: <default_shop_id>` on single-shop routes.
+A missing `X-Shop-Id` returns `400 SHOP_CONTEXT_REQUIRED` rather than silently
+defaulting to the only visible shop (ADR-0006).
+
+Processes: `cmd/api` (stateless HTTP), `cmd/job` (one-shot migrate / seed /
+on-demand audit cleanup). `cmd/worker` is next on the roadmap; neither `api`
+nor `worker` runs migrations at startup.
+
 ## 文档导航
 
 | 文档 | 看什么 |

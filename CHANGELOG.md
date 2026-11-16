@@ -6,6 +6,12 @@
 
 ### 新增
 
+- **R1 首批 Go 代码落地**：`cmd/api`（无状态 HTTP）、`cmd/job`（migrate / seed-user / audit-cleanup）；`migrations/00001_init.sql`（21 张表，含 `user_shops` 多对多、`audit_log_cleanup_runs`、复合外键、幂等与 Outbox 表）与 `00002_rbac_baseline.sql`（通用 RBAC 基线）。
+- `internal/domain/{money,shop}` 纯函数（定点金额 / 分摊、可见门店与默认门店选择）；`internal/platform/{config,errors}` 启动校验与冻结错误码表；`internal/security` JWT + bcrypt + 刷新令牌哈希。
+- `internal/adapter/postgres` SQL-first 仓储（pgx + squirrel `Dollar` 占位符，`DBTX` 同时适配 pool 与 tx）；事务内幂等实现 `IdempotentWrite`，业务写入与幂等记录同一事务提交。
+- `internal/adapter/http` 中间件链（recover → requestid/log → auth → shopscope → idempotency）与 R1 端点：auth / me* / shops + settings / catalog + overrides / members + balance + ledger + topups / health / ready。
+- 单测：金额字符串往返与分摊、默认门店选择、配置边界校验；本地 PG 18.7 迁移 + 端到端 curl 冒烟通过。
+
 - `docs/decisions/0008-design-freeze-and-nq-resolutions.md`：NQ-01–16 全部决议 ADR（已接受）——接受 DP-01–07、确认 `user_shops` 多对多、**冻结详细设计**、固定 R1 首批端点范围与验收标准，并把 Docker 2+2 部署、Go `cmd/job` + 数据库共享、连接池预算、审计清理窗口与容量阈值写成可执行基线；含四组理解澄清与六组备选方案。
 - `docs/design/07-deployment-and-operations.md`：部署与运行基线——Docker `api` × 2 / `worker` × 2、发布顺序与 `/ready` 版本校验、四类数据库共享状态、连接池预算 80 ≤ 100、**worker 双副本 advisory lock 的完整 Go 例子**（含「同一条 `pgx.Conn` 加解锁」陷阱）、2 副本压测基线、容量与告警阈值表。
 - `docs/design/08-audit-retention.md`：审计日志保留与清理——默认 30（取值 `1..3650`、不允许关闭、变更需重启）、**UTC+8 自然日** cutoff SQL、每日 03:30 / 单批 5000 行 / autovacuum 策略、`400 AUDIT_RETENTION_WINDOW_EXCEEDED` 错误契约、`audit_log_cleanup_runs` 痕迹表 DDL、8 个指标与 7 条告警、测试清单。
