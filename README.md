@@ -153,7 +153,7 @@ CHANGELOG.md        变更记录
 | `docs/decisions/0004-scope-baseline.md` | 单币种 / 东八区 / 暂不归档 / 不打印 / 不离线：范围基线与复审条件 |
 | `docs/decisions/0005-no-shop-groups.md` | 为什么取消门店组、跨店范围如何表达与复审条件 |
 | `docs/decisions/0006-user-shops-and-current-shop.md` | 一人多店的关系基数、当前门店的定义与页面切换协议 |
-| `docs/decisions/0007-remaining-open-questions.md` | 剩余开放问题决议：外部集成、前端框架归属、编排平台部署、跨店差额、审计日志 30 天保留，以及由此产生的待确认项 |
+| `docs/decisions/0007-remaining-open-questions.md` | 剩余开放问题决议：外部集成、前端框架归属、编排平台部署、跨店差额、审计日志 30 天保留（其遗留的 NQ-01–16 已由 [ADR-0008](docs/decisions/0008-design-freeze-and-nq-resolutions.md) 全部关闭） |
 | `docs/decisions/0008-design-freeze-and-nq-resolutions.md` | NQ-01–16 全部决议、DP-01–07 接受、详细设计冻结、R1 范围与验收、Docker 2+2 / Go Job / 连接池 / 审计 / 容量基线 |
 | `CONTRIBUTING.md` | 分支、提交与 PR 约定 |
 | `CHANGELOG.md` | 变更记录 |
