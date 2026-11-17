@@ -1,6 +1,6 @@
 # 前期系统架构详细设计 · 03 接口设计
 
-> 上游：[00 总览](00-overview.md) 第 3 节（系统上下文）、[01 领域模型](01-domain-model.md)（状态机与值对象）、[ADR-0003](../decisions/0003-shop-level-isolation.md)、[ADR-0004](../decisions/0004-scope-baseline.md)（单币种、东八区、不打印、不离线）、[ADR-0005](../decisions/0005-no-shop-groups.md)（无门店组端点）、[ADR-0006](../decisions/0006-user-shops-and-current-shop.md)（登录返回门店集合、当前门店必须显式携带、切换协议）、[ADR-0007](../decisions/0007-remaining-open-questions.md)（R1 不接外部服务、不做自动清分、审计日志保留 30 天）。
+> 上游：[00 总览](00-overview.md) 第 3 节（系统上下文）、[01 领域模型](01-domain-model.md)（状态机与值对象）、[ADR-0003](../decisions/0003-shop-level-isolation.md)、[ADR-0004](../decisions/0004-scope-baseline.md)（单币种、东八区、不打印、不离线）、[ADR-0005](../decisions/0005-no-shop-groups.md)（无门店组端点）、[ADR-0006](../decisions/0006-user-shops-and-current-shop.md)（登录返回门店集合、当前门店必须显式携带、切换协议）、[ADR-0007](../decisions/0007-remaining-open-questions.md)（R1 不接外部服务、不做自动清分、审计日志保留 30 天）、[ADR-0009](../decisions/0009-queues-and-staff.md)（队列 / 服务人员端点扩展）。
 > 本册是 `porch-console` 与第三方集成的对接依据。**前端框架由该仓独立决策**（ADR-0007），不影响本册：后端只保证 REST + OpenAPI、不做 BFF。
 
 ## 1. 风格与版本
@@ -181,6 +181,12 @@
 | member | `GET /api/v1/shops/{shopId}/members/{id}/balance` | 该店余额 |
 | member | `GET /api/v1/shops/{shopId}/members/{id}/ledger` | 该店余额流水 |
 | member | `POST /api/v1/shops/{shopId}/members/{id}/topups` | 充值（店内账） |
+| queue（[ADR-0009](../decisions/0009-queues-and-staff.md)） | `GET / POST /api/v1/shops/{shopId}/queues` | 队列列表（按 `seq` 升序）/ 新建（序号 + 名称） |
+| queue | `GET / PATCH / DELETE /api/v1/shops/{shopId}/queues/{queueId}` | 队列详情（含服务人员）/ 修改 / 删除 |
+| queue | `GET / POST /api/v1/shops/{shopId}/staff` | 服务人员列表 / 建档 |
+| queue | `GET / PATCH / DELETE /api/v1/shops/{shopId}/staff/{staffId}` | 人员详情（含所在队列）/ 修改 / 删除 |
+| queue | `GET /api/v1/shops/{shopId}/queues/{queueId}/staff` | 队列内服务人员 |
+| queue | `PUT / DELETE /api/v1/shops/{shopId}/queues/{queueId}/staff/{staffId}` | 加入 / 移出队列（幂等） |
 | order | `POST /api/v1/shops/{shopId}/orders` | 开单（`draft`） |
 | order | `GET /api/v1/shops/{shopId}/orders` | 单据列表（keyset 分页） |
 | order | `GET /api/v1/shops/{shopId}/orders/{id}` | 单据详情（含明细） |

@@ -6,6 +6,8 @@
 
 ### 新增
 
+- **ADR-0009 + `design/10`（受控扩展冻结契约）**：新增队列与服务人员领域——一店多队列（序号 + 名称，门店内各自唯一）、服务人员在**本店**多个队列服务（M:N 关联表 + 复合外键锁同店）、前端主页默认队列视图；R1 首批端点追加 `queues` / `staff` / `queue-staff` 三组，权限点 `queue.read` / `queue.write`。
+
 - **R1 首批 Go 代码落地**：`cmd/api`（无状态 HTTP）、`cmd/job`（migrate / seed-user / audit-cleanup）；`migrations/00001_init.sql`（21 张表，含 `user_shops` 多对多、`audit_log_cleanup_runs`、复合外键、幂等与 Outbox 表）与 `00002_rbac_baseline.sql`（通用 RBAC 基线）。
 - `internal/domain/{money,shop}` 纯函数（定点金额 / 分摊、可见门店与默认门店选择）；`internal/platform/{config,errors}` 启动校验与冻结错误码表；`internal/security` JWT + bcrypt + 刷新令牌哈希。
 - `internal/adapter/postgres` SQL-first 仓储（pgx + squirrel `Dollar` 占位符，`DBTX` 同时适配 pool 与 tx）；事务内幂等实现 `IdempotentWrite`，业务写入与幂等记录同一事务提交。

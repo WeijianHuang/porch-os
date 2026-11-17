@@ -1,6 +1,6 @@
 # 前期系统架构详细设计 · 02 数据库设计
 
-> 上游：[01 领域模型](01-domain-model.md)（聚合与不变量）、[ADR-0001](../decisions/0001-postgresql-18.md)（PostgreSQL 18.7）、[ADR-0003](../decisions/0003-shop-level-isolation.md)（只有 `shop_id`）、[ADR-0004](../decisions/0004-scope-baseline.md)（单币种、东八区、暂不归档）、[ADR-0005](../decisions/0005-no-shop-groups.md)（无门店组表）、[ADR-0006](../decisions/0006-user-shops-and-current-shop.md)（`user_shops` 关系基数与无当前门店表）、[ADR-0007](../decisions/0007-remaining-open-questions.md)（`audit_logs` 保留 30 天定时删除、暂不读写分离、迁移只跑一次）、[ADR-0008](../decisions/0008-design-freeze-and-nq-resolutions.md)（设计冻结、Docker 2+2、Go Job、审计清理与容量基线）。
+> 上游：[01 领域模型](01-domain-model.md)（聚合与不变量）、[ADR-0001](../decisions/0001-postgresql-18.md)（PostgreSQL 18.7）、[ADR-0003](../decisions/0003-shop-level-isolation.md)（只有 `shop_id`）、[ADR-0004](../decisions/0004-scope-baseline.md)（单币种、东八区、暂不归档）、[ADR-0005](../decisions/0005-no-shop-groups.md)（无门店组表）、[ADR-0006](../decisions/0006-user-shops-and-current-shop.md)（`user_shops` 关系基数与无当前门店表）、[ADR-0007](../decisions/0007-remaining-open-questions.md)（`audit_logs` 保留 30 天定时删除、暂不读写分离、迁移只跑一次）、[ADR-0008](../decisions/0008-design-freeze-and-nq-resolutions.md)（设计冻结、Docker 2+2、Go Job、审计清理与容量基线）、[ADR-0009](../decisions/0009-queues-and-staff.md)（队列 / 服务人员领域扩展）。
 > 本文给的是**设计定稿用的 schema 形状**。第 3 节 DDL 是依赖自洽、可在 PG 18.7 上直接执行的**核心表节选**（不含全部表、不含完整 `Down`）；真实迁移文件从 R1 起放 `migrations/`，由 goose 执行。
 
 ## 1. 全局约定
@@ -45,6 +45,9 @@
 | member | `members` | A | 会员档案 | `phone` 全局唯一 |
 | member | `member_balances` | B | 按店余额 | `(shop_id, member_id)` |
 | member | `balance_ledger` | B | 余额变动流水（只追加） | `(shop_id, public_id)` |
+| queue | `queues` | B | 门店队列（序号 + 名称，门店内各自唯一） | `(shop_id, seq)` / `(shop_id, name)` / `public_id` |
+| queue | `staff` | B | 门店服务人员（店内雇员，可在本店多队列服务） | `(shop_id, code)` / `public_id` |
+| queue | `queue_staff` | B | 服务人员 ↔ 队列（店内多对多，复合外键锁同店） | `(queue_id, staff_id)` |
 | member | `member_visits` | B | 到店记录 | `(shop_id, public_id)` |
 | order | `shifts` | B | 收银班次 | `(shop_id, shift_no)`；部分唯一：一店最多一个 `open` |
 | order | `orders` | B | 单据 | **`(shop_id, order_no)` 店内唯一** |

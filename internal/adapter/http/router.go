@@ -78,6 +78,23 @@ func NewRouter(store *postgres.Store, cfg config.Config) *gin.Engine {
 			one.GET("/members/:id/balance", h.GetBalance)
 			one.GET("/members/:id/ledger", h.GetLedger)
 			one.POST("/members/:id/topups", h.Topup)
+
+			// Queues and staff (ADR-0009 / design/10): shop-scoped, one queue has
+			// seq+name, a staff member serves in many queues of the same shop.
+			one.GET("/queues", h.ListQueues)
+			one.POST("/queues", h.CreateQueue)
+			one.GET("/queues/:queueId", h.GetQueue)
+			one.PATCH("/queues/:queueId", h.UpdateQueue)
+			one.DELETE("/queues/:queueId", h.DeleteQueue)
+			one.GET("/queues/:queueId/staff", h.ListQueueStaff)
+			one.PUT("/queues/:queueId/staff/:staffId", h.AssignStaff)
+			one.DELETE("/queues/:queueId/staff/:staffId", h.UnassignStaff)
+
+			one.GET("/staff", h.ListStaff)
+			one.POST("/staff", h.CreateStaff)
+			one.GET("/staff/:staffId", h.GetStaff)
+			one.PATCH("/staff/:staffId", h.UpdateStaff)
+			one.DELETE("/staff/:staffId", h.DeleteStaff)
 		}
 	}
 	return r
