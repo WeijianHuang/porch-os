@@ -126,7 +126,7 @@
 
 **代码评审阻断项**：① 不建实体关联图，结构体之间只持 ID；② 一条查询返回一个场景专用扁平 DTO；③ 不使用数据库视图承载计算口径；④ 动态查询必须用 `$1` 占位符且排序字段走白名单；⑤ 金额禁用浮点；⑥ 写操作必须带幂等键，单号唯一性靠数据库约束并写明范围；⑦ 报表导出流式写出；⑧ 跨店权限判定不缓存；⑨ 集成测试用真实 PG 容器；⑩ **不引入 `tenant_id` / `org_id` / `company_id` 或任何上层隔离维度**（ADR-0003），也不引入门店组 / 分组实体（ADR-0005）；⑪ **不把当前门店做成服务端状态**：禁止 `users.shop_id` / `shops.owner_user_id` 单外键、`current_shop` 表、切换端点或把当前门店写进 JWT，单店请求缺 `X-Shop-Id` 必须报 400（ADR-0006）；⑫ **不引入 R1 范围外的外部 SDK、只读副本 / 读写分离、内部往来账或自动清分**，不在进程启动时跑迁移，审计记录只允许 worker 清理任务删除（ADR-0007）。
 
-R0 引导骨架仅用标准库提供 `/health`，零外部依赖；上表依赖从 R1 起按模块引入。完整理由、备选方案与不选什么见 [ADR-0002](decisions/0002-go-backend-stack.md)。
+R0 引导骨架仅用标准库提供 `/health`，零外部依赖，作为 CI 基线保留。R1 已落地首批依赖：Gin v1.10、pgx/v5、goose、squirrel、golang-jwt/v5、bcrypt、shopspring/decimal。上表中的 sqlc、Redis / ristretto、Prometheus / OpenTelemetry、swaggo、testcontainers-go 等为**已选定但尚未引入 `go.mod`** 的目标，按模块逐步引入，不一次性堆入。完整理由、备选方案与不选什么见 [ADR-0002](decisions/0002-go-backend-stack.md)。
 
 ## 9. 决策记录（ADR）
 

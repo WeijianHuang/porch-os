@@ -1,13 +1,13 @@
 # 本地开发环境
 
-> 状态：数据库与 R0 引导程序可运行；业务代码尚未开始。引导程序只用 Go 标准库，不连接数据库。
+> 状态：数据库、R1 后端（无状态 `cmd/api` 服务 + 一次性 `cmd/job` 任务）与 R0 引导程序均可运行。`cmd/api` 连接数据库，`cmd/porch-os` 是不连库的早期 CI 基线。
 >
 > **本文只覆盖本地开发**。按 [ADR-0007](decisions/0007-remaining-open-questions.md) 与 [ADR-0008](decisions/0008-design-freeze-and-nq-resolutions.md)，本期落地为 **Docker 部署、无状态 `api` × 2 / `worker` × 2**，单主库读写、暂不读写分离；迁移只由 Go `cmd/job migrate` 执行，跨副本共享状态与定时任务互斥全部走 PostgreSQL（advisory lock + 版本表 + 运行记录表），连接池预算 80 ≤ 100。`docker-compose.yml` 只是开发库，不是生产部署清单；平台级配置注入 / Ingress / TLS / 滚动发布时长本期不定义（NQ-09）。完整基线见 [`design/07-deployment-and-operations.md`](design/07-deployment-and-operations.md)。
 
 ## 前置条件
 
 - Docker Desktop（含 Compose v2）
-- Go 1.23+（用于编译与运行 `cmd/porch-os`）
+- Go 1.25+（与 `go.mod` 的 `go 1.25` 一致，CI 按此编译）
 - 本机 `5432` 端口空闲；被占用时改 `.env` 里的 `PORCH_PG_PORT`，无需改其他文件
 
 ## 一次性准备
@@ -17,7 +17,7 @@ cp .env.example .env
 # 把 POSTGRES_PASSWORD 改成随机值，并同步修改 DATABASE_URL 中的密码
 ```
 
-`.env` 已被 `.gitignore` 忽略，绝不提交。Compose 只从 `.env` 读取 `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `PORCH_PG_PORT`；`TZ` / `PGTZ` 与 `-c timezone` 在 Compose 里固定为 `Asia/Shanghai`，不需要也不允许按环境覆盖。`DATABASE_URL` 与 `APP_TIMEZONE` 留给 R1 起接入数据库的应用进程。
+`.env` 已被 `.gitignore` 忽略，绝不提交。Compose 只从 `.env` 读取 `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `PORCH_PG_PORT`；`TZ` / `PGTZ` 与 `-c timezone` 在 Compose 里固定为 `Asia/Shanghai`，不需要也不允许按环境覆盖。`DATABASE_URL` / `APP_TIMEZONE` / `JWT_SECRET` / `EXPECTED_SCHEMA_VERSION` 等由 `cmd/api` 与 `cmd/job` 读取，其中敏感项无默认值、缺失即启动失败（见 `.env.example` 与 `internal/platform/config`）。
 
 ## 启动与停止
 
@@ -60,16 +60,26 @@ docker compose exec db psql -U porch -d porch -tAc \
 postgresql://porch:<password>@localhost:5432/porch?sslmode=disable
 ```
 
-## 编译与运行引导程序
+## 编译与运行
 
 ```bash
 go build ./...
 go test ./...
+go run ./cmd/job migrate                                    # 唯一允许改 schema 的进程
+SEED_LOGIN=admin SEED_PASSWORD=<本地口令> go run ./cmd/job seed-user   # 仅本地，创建 admin 用户
+go run ./cmd/api                                            # /health、/ready，默认 8080
+curl -s localhost:8080/health     # {"status":"ok"}
+curl -s localhost:8080/ready      # 校验 goose schema 版本 = EXPECTED_SCHEMA_VERSION
+```
+
+`PORT` 与 `LOG_LEVEL` 来自环境变量（见 `.env.example`），缺省分别为 `8080` / `info`。`cmd/job` 另有 `audit-cleanup` 子命令用于按需清理过期审计日志；它和 `migrate`、`seed-user` 都是一次性任务，跑完即退出，常驻进程启动时绝不跑迁移。冒烟测试：带 `Idempotency-Key` 调 `POST /api/v1/auth/login`，再用返回的 token 加 `X-Shop-Id` 访问单店路由（缺 `X-Shop-Id` 返回 `400 SHOP_CONTEXT_REQUIRED`）。CI 执行同样的 `go build` / `go vet` / `gofmt` / `go test -race`，本地跑通即可预期 CI 通过。
+
+早期引导程序仍可单独运行，仅为 CI 基线保留，不连接数据库：
+
+```bash
 PORT=8080 go run ./cmd/porch-os
 curl -s localhost:8080/health     # {"status":"ok"}
 ```
-
-`PORT` 与 `LOG_LEVEL` 来自环境变量（见 `.env.example`），缺省分别为 `8080` / `info`。CI 执行同样的 `go build` / `go vet` / `gofmt` / `go test -race`，本地跑通即可预期 CI 通过。
 
 ## 版本与镜像约定
 

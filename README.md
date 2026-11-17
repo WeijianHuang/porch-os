@@ -4,7 +4,7 @@
 
 面向小微门店的开源经营系统后端：多门店统一管理、跨店会员与库存、按店出账与汇总报表。
 
-**状态：早期工程阶段。** 数据库已选定 **PostgreSQL 18.7**（[ADR-0001](docs/decisions/0001-postgresql-18.md)），后端技术栈已选定 **Go + SQL 优先**（[ADR-0002](docs/decisions/0002-go-backend-stack.md)），数据隔离模型已锁定为**仅门店层 `shop_id`、无租户层**（[ADR-0003](docs/decisions/0003-shop-level-isolation.md)），业务范围基线已锁定为**单币种 CNY / 统一 UTC+8 / 暂不归档 / 不打印 / 不离线**（[ADR-0004](docs/decisions/0004-scope-baseline.md)），门店组概念已取消、跨店改用显式门店集合（[ADR-0005](docs/decisions/0005-no-shop-groups.md)），一个用户可拥有多间门店且当前门店可在页面切换（[ADR-0006](docs/decisions/0006-user-shops-and-current-shop.md)），**剩余开放问题已全部关闭**（[ADR-0007](docs/decisions/0007-remaining-open-questions.md)：R1 不接外部服务 / 前端框架归属 / 支持编排平台且暂不读写分离 / 不做跨店自动清分 / 审计日志保留 30 天可配并定时删除），**NQ 全部决议、详细设计冻结与 R1 运行基线已锁定**（[ADR-0008](docs/decisions/0008-design-freeze-and-nq-resolutions.md)：Docker 2+2 + Go `cmd/job` + 数据库共享）。`cmd/porch-os` 目前只提供零依赖的健康探针，作为 CI 的编译与测试基线；业务代码尚未开始。**前期系统架构详细设计已冻结**（[ADR-0008](docs/decisions/0008-design-freeze-and-nq-resolutions.md)），见 [`docs/design/00-overview.md`](docs/design/00-overview.md)：OQ / NQ 全部关闭、DP-01–07 已接受、R1 首批范围与验收标准已定，本期落地 Docker 2+2 + Go Job + 数据库共享。前端框架由 `porch-console` 独立决策（NQ-14 已决：以既有内部前端工程实践为依据，工程名称不写入公开仓库），不阻塞后端。
+**状态：早期工程阶段。** 数据库已选定 **PostgreSQL 18.7**（[ADR-0001](docs/decisions/0001-postgresql-18.md)），后端技术栈已选定 **Go + SQL 优先**（[ADR-0002](docs/decisions/0002-go-backend-stack.md)），数据隔离模型已锁定为**仅门店层 `shop_id`、无租户层**（[ADR-0003](docs/decisions/0003-shop-level-isolation.md)），业务范围基线已锁定为**单币种 CNY / 统一 UTC+8 / 暂不归档 / 不打印 / 不离线**（[ADR-0004](docs/decisions/0004-scope-baseline.md)），门店组概念已取消、跨店改用显式门店集合（[ADR-0005](docs/decisions/0005-no-shop-groups.md)），一个用户可拥有多间门店且当前门店可在页面切换（[ADR-0006](docs/decisions/0006-user-shops-and-current-shop.md)），**剩余开放问题已全部关闭**（[ADR-0007](docs/decisions/0007-remaining-open-questions.md)：R1 不接外部服务 / 前端框架归属 / 支持编排平台且暂不读写分离 / 不做跨店自动清分 / 审计日志保留 30 天可配并定时删除），**NQ 全部决议、详细设计冻结与 R1 运行基线已锁定**（[ADR-0008](docs/decisions/0008-design-freeze-and-nq-resolutions.md)：Docker 2+2 + Go `cmd/job` + 数据库共享）。`cmd/api` 已提供无状态 HTTP 服务（认证、门店、目录、会员、余额等首批端点），`cmd/job` 提供 migrate / seed-user / audit-cleanup 一次性任务，`cmd/porch-os` 保留为 CI 的零依赖健康探针基线。**前期系统架构详细设计已冻结**（[ADR-0008](docs/decisions/0008-design-freeze-and-nq-resolutions.md)），见 [`docs/design/00-overview.md`](docs/design/00-overview.md)：OQ / NQ 全部关闭、DP-01–07 已接受、R1 首批范围与验收标准已定，本期落地 Docker 2+2 + Go Job + 数据库共享。前端框架由 `porch-console` 独立决策（NQ-14 已决：以既有内部前端工程实践为依据，工程名称不写入公开仓库），不阻塞后端。
 
 License: MIT · 语言：中文文档（发布前补英文版）
 
@@ -16,7 +16,7 @@ License: MIT · 语言：中文文档（发布前补英文版）
 
 一个人开一家店时，记账靠本子就够；开到第二家、第三家，数据就开始散落在不同的表格、账号和设备里。Porch OS 要解决的就是这一步：用一套系统管理任意数量的门店，让每笔单据、每件库存、每位会员都明确属于哪家店——单店能独立核算，多店能汇总对比（直接按门店选择范围，不设门店组），并且从数据层就防止把 A 店的数据读进 B 店的页面。
 
-它只做通用的经营底座：门店、商品与服务、跨店会员、开单收银、报表与权限。项目刻意不预设任何行业规则，餐饮、零售、服务业的用法由使用方自行扩展。数据库、后端技术栈与「仅门店层」的隔离模型均已锁定，当前仓库先固定多店模型、工程约定、可复现的本地数据库环境与可编译的引导骨架；后续模块级决策继续以 ADR 逐条记录。
+它只做通用的经营底座：门店、商品与服务、跨店会员、开单收银、报表与权限。项目刻意不预设任何行业规则，餐饮、零售、服务业的用法由使用方自行扩展。数据库、后端技术栈与「仅门店层」的隔离模型均已锁定，仓库已固定多店模型、工程约定、可复现的本地数据库环境，并落地 R1 首批后端实现（领域 / 应用 / 接口 / 数据访问四层与数据库迁移）；后续模块级决策继续以 ADR 逐条记录。
 
 **边界（不做什么）**
 
@@ -77,7 +77,7 @@ It provides only a shared foundation: shops, catalog, members, checkout, reports
 | 数据隔离模型 | **已定：仅门店层 `shop_id`，无租户层** — [ADR-0003](docs/decisions/0003-shop-level-isolation.md) |
 | 门店组 / 店群 | **已定：不设**，跨店改用显式门店集合 — [ADR-0005](docs/decisions/0005-no-shop-groups.md) |
 | 用户-门店关系 / 当前门店 | **已定：一人多店（`user_shops` 多对多），当前门店可在页面切换、不落库** — [ADR-0006](docs/decisions/0006-user-shops-and-current-shop.md) |
-| 后端语言 / Web 框架 | **已定：Go 1.23+ / Gin v1.10** — [ADR-0002](docs/decisions/0002-go-backend-stack.md) |
+| 后端语言 / Web 框架 | **已定：Go 1.25 / Gin v1.10** — [ADR-0002](docs/decisions/0002-go-backend-stack.md) |
 | 接口风格 | **已定：REST + OpenAPI**（`swaggo/swag`） |
 | 数据访问 | **已定：sqlc + squirrel + pgx/v5 + 自建 Unit of Work**；无实体关联图、无数据库视图 |
 | 迁移管理 | **已定：goose + atlas** |
@@ -97,49 +97,56 @@ It provides only a shared foundation: shops, catalog, members, checkout, reports
 | 详细设计状态 / R1 范围 | **已冻结**：`docs/design/00`–`09` + ADR-0001–0008；R1 首批端点与验收标准见 [ADR-0008](docs/decisions/0008-design-freeze-and-nq-resolutions.md) §3 |
 | 运行基线 | **已定**：Docker `api` × 2 / `worker` × 2、Go `cmd/job`、连接池 80 ≤ 100、审计 UTC+8 自然日窗口、容量阈值 — [ADR-0008](docs/decisions/0008-design-freeze-and-nq-resolutions.md) / `docs/design/07` |
 
-R0 的 `cmd/porch-os` 引导程序只用标准库、零外部依赖，目的是让 CI 有可复现的编译与测试基线；ADR-0002 列出的依赖从 R1 起按模块逐步引入，不一次性堆进 `go.mod`。
+R0 的 `cmd/porch-os` 引导程序只用标准库、零外部依赖，作为 CI 的编译与测试基线保留；R1 已按模块引入 ADR-0002 中的首批依赖（Gin、pgx/v5、goose、golang-jwt/v5、squirrel、decimal、bcrypt），其余依赖仍按模块逐步引入，不一次性堆进 `go.mod`。
 
 ## 快速开始
 
-前置：Docker Desktop（含 Compose v2）、Go 1.23+。业务代码尚未开始，当前能跑的是数据库与健康探针。
+前置：Docker Desktop（含 Compose v2）、Go 1.25+（与 `go.mod` 一致，CI 按此编译）。数据库、迁移任务、`cmd/api` 服务均已可运行。
 
 ```bash
 git clone https://github.com/WeijianHuang/porch-os.git
 cd porch-os
-cp .env.example .env       # 把 POSTGRES_PASSWORD 改成随机值
+cp .env.example .env       # 把 POSTGRES_PASSWORD 改成随机值，并同步 DATABASE_URL 中的密码
 docker compose up -d db    # 启动 PostgreSQL 18.7
 docker compose ps          # 等待 STATUS 变为 healthy
 
 go build ./...
 go test ./...
-PORT=8080 go run ./cmd/porch-os
+go run ./cmd/job migrate                                   # 唯一允许改 schema 的进程
+SEED_LOGIN=admin SEED_PASSWORD=<本地口令> go run ./cmd/job seed-user
+go run ./cmd/api           # /health 与 /ready，默认 8080
 curl -s localhost:8080/health   # {"status":"ok"}
 ```
 
-引导程序**不连接数据库**，`/health` 只用于验证进程与 CI；`DATABASE_URL` 从 R1 起接入。连接串、版本校验与重置方式见 [`docs/LOCAL-DEV.md`](docs/LOCAL-DEV.md)。
+`cmd/api` 连接数据库并提供 `/health`（存活）与 `/ready`（就绪，校验 schema 版本）；`cmd/porch-os` 是不连库的早期引导程序，仅为 CI 基线保留。连接串、版本校验与重置方式见 [`docs/LOCAL-DEV.md`](docs/LOCAL-DEV.md)。
 
 ## 仓库结构
 
 ```
 .github/            CI 工作流（Go 构建/测试 + 仓库卫生）与 PR 模板
-cmd/porch-os/       R0 引导程序（/health）与单测
+AGENTS.md           给 AI 编码助手的仓库约定与红线（与 CONTRIBUTING.md 互补）
+cmd/api/            R1 无状态 HTTP 服务（/health、/ready 与 /api/v1）
+cmd/job/            一次性任务：migrate / seed-user / audit-cleanup
+cmd/porch-os/       早期零依赖引导程序（/health），CI 基线保留
+internal/           app 装配 · adapter/http 接口 · adapter/postgres 数据访问 · domain 领域 · platform 配置与错误 · security 令牌
 docs/               架构原则、详细设计、本地环境、决策记录
   ARCHITECTURE.md   隔离模型、分层、技术栈落地与稳健性原则
   design/           前期详细设计 00–09（总览 / 领域 / 数据库 / 接口 / 应用架构 / 横切 / 流程 / 部署 / 审计 / 跨店差额）
   LOCAL-DEV.md      本地 PostgreSQL 启动、验证与重置
   decisions/        ADR：0001 数据库、0002 后端技术栈、0003 仅门店层隔离、0004 范围基线、0005 取消门店组、0006 用户-门店关系与切换、0007 剩余开放问题决议、0008 设计冻结与运行基线
-go.mod              Go 模块定义（当前零外部依赖）
+migrations/         goose 迁移：0001 初始化 schema、0002 RBAC 基线
+go.mod              Go 模块定义（go 1.25；已引入 Gin / pgx / goose 等首批依赖）
 docker-compose.yml  本地数据库（PostgreSQL 18.7）
 .env.example        配置占位（仅示例值）
 CONTRIBUTING.md     贡献流程
 CHANGELOG.md        变更记录
 ```
 
-`internal/` 将在 R1 按领域层 / 应用层 / 接口层 / 数据访问层建立，依赖方向见架构文档。
+分层依赖方向见架构文档；`cmd/worker` 尚在路线图中，未实现。
 
 ## R1 quick start
 
-Prerequisites: Go 1.23+ and a running PostgreSQL 18.7 (`docker compose up -d db`).
+Prerequisites: Go 1.25+ (matching `go.mod`) and a running PostgreSQL 18.7 (`docker compose up -d db`).
 
 ```bash
 cp .env.example .env          # set DATABASE_URL / JWT_SECRET / EXPECTED_SCHEMA_VERSION=2
