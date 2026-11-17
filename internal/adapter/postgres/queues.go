@@ -27,6 +27,7 @@ type Staff struct {
 	Code        string    `json:"code"`
 	DisplayName string    `json:"display_name"`
 	Status      string    `json:"status"`
+	DutyStatus  string    `json:"duty_status"`
 	Version     int       `json:"version"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
@@ -34,7 +35,7 @@ type Staff struct {
 }
 
 const queueCols = "public_id::text, seq, name, status, version, created_at, updated_at, id"
-const staffCols = "public_id::text, code, display_name, status, version, created_at, updated_at, id"
+const staffCols = "public_id::text, code, display_name, status, duty_status, version, created_at, updated_at, id"
 
 func scanQueue(row pgx.Row) (Queue, error) {
 	var v Queue
@@ -45,7 +46,7 @@ func scanQueue(row pgx.Row) (Queue, error) {
 
 func scanStaff(row pgx.Row) (Staff, error) {
 	var v Staff
-	err := row.Scan(&v.PublicID, &v.Code, &v.DisplayName, &v.Status, &v.Version, &v.CreatedAt, &v.UpdatedAt, &v.ID)
+	err := row.Scan(&v.PublicID, &v.Code, &v.DisplayName, &v.Status, &v.DutyStatus, &v.Version, &v.CreatedAt, &v.UpdatedAt, &v.ID)
 	v.CreatedAt, v.UpdatedAt = utc(v.CreatedAt), utc(v.UpdatedAt)
 	return v, err
 }
@@ -160,10 +161,10 @@ func (s *Store) CreateStaff(ctx context.Context, tx pgx.Tx, shopID int64, code, 
 	return scanStaff(tx.QueryRow(ctx, `SELECT `+staffCols+` FROM staff WHERE id=$1`, id))
 }
 
-func (s *Store) UpdateStaff(ctx context.Context, tx pgx.Tx, shopID, id int64, displayName, status string, version int) (Staff, error) {
+func (s *Store) UpdateStaff(ctx context.Context, tx pgx.Tx, shopID, id int64, displayName, status, dutyStatus string, version int) (Staff, error) {
 	tag, err := tx.Exec(ctx, `
-		UPDATE staff SET display_name=$3, status=$4, version=version+1, updated_at=now()
-		WHERE id=$1 AND shop_id=$2 AND version=$5`, id, shopID, displayName, status, version)
+		UPDATE staff SET display_name=$3, status=$4, duty_status=$5, version=version+1, updated_at=now()
+		WHERE id=$1 AND shop_id=$2 AND version=$6`, id, shopID, displayName, status, dutyStatus, version)
 	if err != nil {
 		return Staff{}, err
 	}
@@ -186,7 +187,7 @@ func (s *Store) Assignments(ctx context.Context, q DBTX, shopID int64, queueID, 
 	if q == nil {
 		q = s.Pool
 	}
-	b := squirrel.Select("q.public_id::text, q.name, q.seq, st.public_id::text, st.display_name").
+	b := squirrel.Select("q.public_id::text, q.name, q.seq, st.public_id::text, st.display_name, st.duty_status, qs.position").
 		From("queue_staff qs").
 		Join("queues q ON q.id = qs.queue_id AND q.shop_id = qs.shop_id").
 		Join("staff st ON st.id = qs.staff_id AND st.shop_id = qs.shop_id").
@@ -197,6 +198,7 @@ func (s *Store) Assignments(ctx context.Context, q DBTX, shopID int64, queueID, 
 	if staffID != nil {
 		b = b.Where(squirrel.Eq{"qs.staff_id": *staffID})
 	}
+	b = b.OrderBy("q.seq ASC", "qs.position ASC", "st.public_id::text ASC")
 	sql, args, err := b.ToSql()
 	if err != nil {
 		return nil, err
@@ -209,7 +211,8 @@ func (s *Store) Assignments(ctx context.Context, q DBTX, shopID int64, queueID, 
 	out := make([]qdomain.Assignment, 0)
 	for rows.Next() {
 		var a qdomain.Assignment
-		if err := rows.Scan(&a.QueuePublicID, &a.QueueName, &a.QueueSeq, &a.StaffPublicID, &a.StaffDisplayName); err != nil {
+		if err := rows.Scan(&a.QueuePublicID, &a.QueueName, &a.QueueSeq, &a.StaffPublicID,
+			&a.StaffDisplayName, &a.StaffDutyStatus, &a.Position); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -221,14 +224,100 @@ func (s *Store) Assignments(ctx context.Context, q DBTX, shopID int64, queueID, 
 // pair; the composite PK makes a repeated assignment a no-op.
 func (s *Store) Assign(ctx context.Context, tx pgx.Tx, shopID, queueID, staffID int64) error {
 	_, err := tx.Exec(ctx, `
-		INSERT INTO queue_staff (shop_id,queue_id,staff_id) VALUES ($1,$2,$3)
+		INSERT INTO queue_staff (shop_id,queue_id,staff_id,position)
+		SELECT $1,$2,$3, COALESCE(MAX(position),0)+1
+		FROM queue_staff WHERE shop_id=$1 AND queue_id=$2
 		ON CONFLICT (queue_id,staff_id) DO NOTHING`, shopID, queueID, staffID)
 	return err
 }
 
+// Unassign removes the link and compacts remaining positions in the same
+// transaction. Negative temporary values avoid the unique (queue_id, position).
 func (s *Store) Unassign(ctx context.Context, tx pgx.Tx, shopID, queueID, staffID int64) error {
-	_, err := tx.Exec(ctx, `DELETE FROM queue_staff WHERE shop_id=$1 AND queue_id=$2 AND staff_id=$3`, shopID, queueID, staffID)
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM queue_staff WHERE shop_id=$1 AND queue_id=$2 AND staff_id=$3`,
+		shopID, queueID, staffID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE queue_staff qs SET position = -ranked.rn
+		FROM (
+		  SELECT staff_id, row_number() OVER (ORDER BY position) AS rn
+		  FROM queue_staff WHERE shop_id=$1 AND queue_id=$2
+		) ranked
+		WHERE qs.shop_id=$1 AND qs.queue_id=$2 AND qs.staff_id=ranked.staff_id`,
+		shopID, queueID); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx,
+		`UPDATE queue_staff SET position = -position
+		 WHERE shop_id=$1 AND queue_id=$2 AND position < 0`, shopID, queueID)
 	return err
+}
+
+// ReorderQueueStaff atomically replaces a queue's member order. It returns the
+// bumped queue so handlers can build a fresh detail response.
+func (s *Store) ReorderQueueStaff(
+	ctx context.Context,
+	tx pgx.Tx,
+	shopID, queueID int64,
+	orderedPublicIDs []string,
+	version int,
+) (Queue, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT st.public_id::text, qs.staff_id
+		FROM queue_staff qs
+		JOIN staff st ON st.id = qs.staff_id AND st.shop_id = qs.shop_id
+		WHERE qs.shop_id=$1 AND qs.queue_id=$2
+		ORDER BY qs.position`, shopID, queueID)
+	if err != nil {
+		return Queue{}, err
+	}
+	idsByPublic := make(map[string]int64)
+	current := make([]string, 0)
+	for rows.Next() {
+		var publicID string
+		var staffID int64
+		if err := rows.Scan(&publicID, &staffID); err != nil {
+			rows.Close()
+			return Queue{}, err
+		}
+		idsByPublic[publicID] = staffID
+		current = append(current, publicID)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return Queue{}, err
+	}
+	if err := qdomain.ValidateOrder(current, orderedPublicIDs); err != nil {
+		return Queue{}, err
+	}
+	for i, publicID := range orderedPublicIDs {
+		if _, err := tx.Exec(ctx,
+			`UPDATE queue_staff SET position=$4
+			 WHERE shop_id=$1 AND queue_id=$2 AND staff_id=$3`,
+			shopID, queueID, idsByPublic[publicID], -(i + 1)); err != nil {
+			return Queue{}, err
+		}
+	}
+	for i, publicID := range orderedPublicIDs {
+		if _, err := tx.Exec(ctx,
+			`UPDATE queue_staff SET position=$4
+			 WHERE shop_id=$1 AND queue_id=$2 AND staff_id=$3`,
+			shopID, queueID, idsByPublic[publicID], i+1); err != nil {
+			return Queue{}, err
+		}
+	}
+	tag, err := tx.Exec(ctx,
+		`UPDATE queues SET version=version+1, updated_at=now()
+		 WHERE id=$1 AND shop_id=$2 AND version=$3`, queueID, shopID, version)
+	if err != nil {
+		return Queue{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return Queue{}, pgx.ErrNoRows
+	}
+	return scanQueue(tx.QueryRow(ctx, `SELECT `+queueCols+` FROM queues WHERE id=$1`, queueID))
 }
 
 // Active counts staff currently assigned to a queue; used in list responses.

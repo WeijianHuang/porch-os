@@ -259,13 +259,18 @@ func (h *Handler) UpdateStaff(c *gin.Context) {
 	var req struct {
 		DisplayName *string `json:"display_name"`
 		Status      *string `json:"status"`
+		DutyStatus  *string `json:"duty_status"`
 		Version     int     `json:"version"`
 	}
 	if err := decode(c, &req); err != nil || req.Version < 0 {
 		badRequest(c, errors.New("version is required"))
 		return
 	}
-	name, status := existing.DisplayName, existing.Status
+	if req.DisplayName == nil && req.Status == nil && req.DutyStatus == nil {
+		badRequest(c, errors.New("at least one field is required"))
+		return
+	}
+	name, status, duty := existing.DisplayName, existing.Status, existing.DutyStatus
 	if req.DisplayName != nil {
 		name = *req.DisplayName
 		if err := qdomain.ValidateStaff(existing.Code, name); err != nil {
@@ -280,9 +285,16 @@ func (h *Handler) UpdateStaff(c *gin.Context) {
 		}
 		status = *req.Status
 	}
+	if req.DutyStatus != nil {
+		duty = *req.DutyStatus
+	}
+	if err := qdomain.ValidateDuty(status, duty); err != nil {
+		badRequest(c, err)
+		return
+	}
 	shopID, id := p.ShopID, existing.ID
 	h.runWrite(c, func(tx pgx.Tx) (int, any, error) {
-		v, err := h.Store.UpdateStaff(c.Request.Context(), tx, shopID, id, name, status, req.Version)
+		v, err := h.Store.UpdateStaff(c.Request.Context(), tx, shopID, id, name, status, duty, req.Version)
 		if postgres.IsNoRows(err) {
 			return 0, nil, apierrors.New("VERSION_CONFLICT", "并发冲突，请重读后重试")
 		}
@@ -398,5 +410,58 @@ func (h *Handler) UnassignStaff(c *gin.Context) {
 			return 0, nil, pgErr(err)
 		}
 		return 204, nil, nil
+	})
+}
+
+// ReorderQueueStaff replaces the queue-local order with a full member list.
+// The queue version is the optimistic lock (ADR-0010 §2).
+func (h *Handler) ReorderQueueStaff(c *gin.Context) {
+	if !hasPerm(Current(c), "queue.write") {
+		fail(c, apierrors.PermissionDenied)
+		return
+	}
+	p := Current(c)
+	queue, err := h.Store.QueueByPublicID(c.Request.Context(), nil, p.ShopID, c.Param("queueId"))
+	if postgres.IsNoRows(err) {
+		fail(c, apierrors.NotFound)
+		return
+	}
+	if err != nil {
+		fail(c, pgErr(err))
+		return
+	}
+	var req struct {
+		StaffIDs []string `json:"staff_ids"`
+		Version  int      `json:"version"`
+	}
+	if err := decode(c, &req); err != nil || req.Version < 0 {
+		badRequest(c, errors.New("staff_ids and version are required"))
+		return
+	}
+	shopID, queueID := p.ShopID, queue.ID
+	h.runWrite(c, func(tx pgx.Tx) (int, any, error) {
+		v, err := h.Store.ReorderQueueStaff(c.Request.Context(), tx, shopID, queueID, req.StaffIDs, req.Version)
+		if errors.Is(err, qdomain.ErrInvalidOrder) {
+			return 0, nil, apierrors.WithDetails(apierrors.InvalidArgument,
+				apierrors.Detail{Field: "staff_ids", Reason: err.Error()})
+		}
+		if postgres.IsNoRows(err) {
+			return 0, nil, apierrors.New("VERSION_CONFLICT", "并发冲突，请重读后重试")
+		}
+		if err != nil {
+			return 0, nil, pgErr(err)
+		}
+		assignments, err := h.Store.Assignments(c.Request.Context(), tx, shopID, &v.ID, nil)
+		if err != nil {
+			return 0, nil, pgErr(err)
+		}
+		staff := qdomain.StaffByQueue(assignments)[v.PublicID]
+		if staff == nil {
+			staff = []qdomain.StaffRef{}
+		}
+		return 200, h.envelope(c, struct {
+			postgres.Queue
+			Staff []qdomain.StaffRef `json:"staff"`
+		}{Queue: v, Staff: staff}, nil), nil
 	})
 }

@@ -142,7 +142,7 @@ CHANGELOG.md        变更记录
 Prerequisites: Go 1.23+ and a running PostgreSQL 18.7 (`docker compose up -d db`).
 
 ```bash
-cp .env.example .env          # set DATABASE_URL / JWT_SECRET / EXPECTED_SCHEMA_VERSION=4
+cp .env.example .env          # set DATABASE_URL / JWT_SECRET / EXPECTED_SCHEMA_VERSION=5
 go run ./cmd/job migrate      # the ONLY process allowed to change the schema
 SEED_LOGIN=admin SEED_PASSWORD=<local-password> go run ./cmd/job seed-user
 go run ./cmd/api              # /health and /ready on PORT (default 8080)
@@ -166,7 +166,7 @@ nor `worker` runs migrations at startup.
 | [`docs/design/00-overview.md`](docs/design/00-overview.md) | **前期详细设计总览（已冻结）**：质量属性、模块划分、数据归属三分法、已接受的设计决策与已关闭的 OQ / NQ 清单、分册地图 |
 | `docs/design/01`–`06` | 领域模型 / 数据库设计 / 接口设计 / 应用架构 / 横切机制 / 关键流程 |
 | `docs/design/07`–`09` | 部署与运行基线 / 审计日志保留与清理 / 跨店差额与清分边界 |
-| `docs/design/10` | 队列与服务人员（一店多队列、店内多队列分配、主页默认队列视图） |
+| `docs/design/10` | 队列与服务人员（一店多队列、店内多队列分配、在岗状态与队列内顺序、主页默认队列视图） |
 | `docs/LOCAL-DEV.md` | 本地数据库与引导程序的启动、验证与重置 |
 | `docs/decisions/0001-postgresql-18.md` | 为什么选 PG 18.7、代价与复审条件 |
 | `docs/decisions/0002-go-backend-stack.md` | 为什么选 Go + SQL 优先、评审阻断项与不选什么 |
@@ -176,6 +176,7 @@ nor `worker` runs migrations at startup.
 | `docs/decisions/0006-user-shops-and-current-shop.md` | 一人多店的关系基数、当前门店的定义与页面切换协议 |
 | `docs/decisions/0007-remaining-open-questions.md` | 剩余开放问题决议：外部集成、前端框架归属、编排平台部署、跨店差额、审计日志 30 天保留（其遗留的 NQ-01–16 已由 [ADR-0008](docs/decisions/0008-design-freeze-and-nq-resolutions.md) 全部关闭） |
 | `docs/decisions/0009-queues-and-staff.md` | 队列 / 服务人员领域扩展、主页默认队列视图（受控扩展 R1） |
+| `docs/decisions/0010-duty-status-and-queue-order.md` | 服务人员在岗状态与队列内顺序（第二次受控扩展，schema 版本 5） |
 | `docs/decisions/0008-design-freeze-and-nq-resolutions.md` | NQ-01–16 全部决议、DP-01–07 接受、详细设计冻结、R1 范围与验收、Docker 2+2 / Go Job / 连接池 / 审计 / 容量基线 |
 | `CONTRIBUTING.md` | 分支、提交与 PR 约定 |
 | `CHANGELOG.md` | 变更记录 |

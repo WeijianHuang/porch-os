@@ -184,9 +184,10 @@
 | queue（[ADR-0009](../decisions/0009-queues-and-staff.md)） | `GET / POST /api/v1/shops/{shopId}/queues` | 队列列表（按 `seq` 升序）/ 新建（序号 + 名称） |
 | queue | `GET / PATCH / DELETE /api/v1/shops/{shopId}/queues/{queueId}` | 队列详情（含服务人员）/ 修改 / 删除 |
 | queue | `GET / POST /api/v1/shops/{shopId}/staff` | 服务人员列表 / 建档 |
-| queue | `GET / PATCH / DELETE /api/v1/shops/{shopId}/staff/{staffId}` | 人员详情（含所在队列）/ 修改 / 删除 |
-| queue | `GET /api/v1/shops/{shopId}/queues/{queueId}/staff` | 队列内服务人员 |
-| queue | `PUT / DELETE /api/v1/shops/{shopId}/queues/{queueId}/staff/{staffId}` | 加入 / 移出队列（幂等） |
+| queue | `GET / PATCH / DELETE /api/v1/shops/{shopId}/staff/{staffId}` | 人员详情（含所在队列）/ 修改（`duty_status` 在岗切换，见 [ADR-0010](../decisions/0010-duty-status-and-queue-order.md)）/ 删除 |
+| queue | `GET /api/v1/shops/{shopId}/queues/{queueId}/staff` | 队列内服务人员（按 `position` 升序） |
+| queue | `PUT / DELETE /api/v1/shops/{shopId}/queues/{queueId}/staff/{staffId}` | 加入（追加到队尾）/ 移出（剩余位置压缩，幂等） |
+| queue | `PUT /api/v1/shops/{shopId}/queues/{queueId}/staff/order` | 队列内全量重排：`{staff_ids, version}`，成功回传新队列详情，409 版本冲突 |
 | order | `POST /api/v1/shops/{shopId}/orders` | 开单（`draft`） |
 | order | `GET /api/v1/shops/{shopId}/orders` | 单据列表（keyset 分页） |
 | order | `GET /api/v1/shops/{shopId}/orders/{id}` | 单据详情（含明细） |

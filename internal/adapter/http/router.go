@@ -87,6 +87,8 @@ func NewRouter(store *postgres.Store, cfg config.Config) *gin.Engine {
 			one.PATCH("/queues/:queueId", h.UpdateQueue)
 			one.DELETE("/queues/:queueId", h.DeleteQueue)
 			one.GET("/queues/:queueId/staff", h.ListQueueStaff)
+			// Static path first: "order" must not be captured as :staffId.
+			one.PUT("/queues/:queueId/staff/order", h.ReorderQueueStaff)
 			one.PUT("/queues/:queueId/staff/:staffId", h.AssignStaff)
 			one.DELETE("/queues/:queueId/staff/:staffId", h.UnassignStaff)
 

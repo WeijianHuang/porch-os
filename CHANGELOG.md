@@ -6,6 +6,7 @@
 
 ### 新增
 
+- **ADR-0010 + `design/10`（第二次受控扩展冻结契约）**：服务人员新增 `duty_status`（`on` / `off`，当前状态位、无考勤流水），`queue_staff` 新增 `position`（队列内密集 1..n，唯一 `(queue_id, position)`）；`PATCH /staff/{staffId}` 支持在岗切换，`PUT /queues/{queueId}/staff/order` 以全量有序 `staff_ids` + `queues.version` 原子重排；`EXPECTED_SCHEMA_VERSION` 升为 `5`。
 - **ADR-0009 + `design/10`（受控扩展冻结契约）**：新增队列与服务人员领域——一店多队列（序号 + 名称，门店内各自唯一）、服务人员在**本店**多个队列服务（M:N 关联表 + 复合外键锁同店）、前端主页默认队列视图；R1 首批端点追加 `queues` / `staff` / `queue-staff` 三组，权限点 `queue.read` / `queue.write`。
 
 - **R1 首批 Go 代码落地**：`cmd/api`（无状态 HTTP）、`cmd/job`（migrate / seed-user / audit-cleanup）；`migrations/00001_init.sql`（21 张表，含 `user_shops` 多对多、`audit_log_cleanup_runs`、复合外键、幂等与 Outbox 表）与 `00002_rbac_baseline.sql`（通用 RBAC 基线）。
