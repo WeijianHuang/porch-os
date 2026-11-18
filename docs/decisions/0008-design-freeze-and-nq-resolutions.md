@@ -1,6 +1,7 @@
 # ADR-0008: NQ 全部决议、详细设计冻结与 R1 运行基线
 
 - 状态：已接受（2026-11-15）
+- **修订记录（2026-11-17）**：[ADR-0009](0009-queues-and-staff.md) 在本冻结契约上**受控扩展** R1 首批端点（新增队列 / 服务人员领域与主页默认队列视图）；[ADR-0010](0010-duty-status-and-queue-order.md) 为第二次受控扩展（服务人员在岗状态与队列内顺序，`EXPECTED_SCHEMA_VERSION` 升为 `5`）；本文其余条款、运行基线与验收标准不变。
 - 决策问题：一次性关闭 [`../design/00-overview.md`](../design/00-overview.md) 第 8.2 节的 NQ-01–16，接受 DP-01–07，**冻结前期详细设计**，并固定 R1 首批范围、验收标准，以及部署 / 任务 / 连接池 / 审计清理 / 容量的可执行口径
 - 影响范围：设计文档状态、[ADR-0006](0006-user-shops-and-current-shop.md)（关闭悬置假设）、[ADR-0007](0007-remaining-open-questions.md)（收口「仍需确认」、修订详细设计状态）、新增 `design/07`–`09` 三册、`cmd/job` 进程、`audit_log_cleanup_runs` 表、错误码表、连接池与告警阈值、R1 上线清单
 - 上游：[ADR-0001](0001-postgresql-18.md)（PG 18.7）、[ADR-0002](0002-go-backend-stack.md)（Go + SQL 优先、9 条阻断项）、[ADR-0003](0003-shop-level-isolation.md)（只有 `shop_id`）、[ADR-0004](0004-scope-baseline.md)（范围基线）、[ADR-0005](0005-no-shop-groups.md)（无门店组）、[ADR-0006](0006-user-shops-and-current-shop.md)（一人多店 / 当前门店）、[ADR-0007](0007-remaining-open-questions.md)（剩余 OQ 决议）
@@ -78,6 +79,7 @@
 | `GET/POST /catalog-items`、`GET/PATCH /catalog-items/{id}`、`GET /catalog-categories`、`GET/PUT /shops/{shopId}/catalog-overrides/{itemId}` | 报表、跨店汇总、导出任务（R2/R3） |
 | `GET/POST /members`、`GET/PATCH /members/{id}`、`GET /shops/{shopId}/members/{id}/balance`、`/ledger` | 审计查询界面、WebSocket、外部集成回调 |
 | `GET /health`、`GET /ready` | 门店组、打印、离线、归档、清分（范围外，永不纳入） |
+| 队列 / 服务人员（[ADR-0009](0009-queues-and-staff.md)）及在岗状态 / 队列内重排（[ADR-0010](0010-duty-status-and-queue-order.md)）：`queues` / `staff` / `queue-staff` 端点、`PATCH /staff/{staffId}` 的 `duty_status`、`PUT /queues/{queueId}/staff/order` | 考勤流水、排班、叫号实例（ADR-0010 明确不做） |
 | 所有写操作统一带 `Idempotency-Key`；所有单店请求统一带 `X-Shop-Id` | — |
 
 **验收标准**（R1 完成的定义）：

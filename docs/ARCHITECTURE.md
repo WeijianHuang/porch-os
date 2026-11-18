@@ -140,6 +140,8 @@ R0 引导骨架仅用标准库提供 `/health`，零外部依赖，作为 CI 基
 - [0006 · 用户可拥有多间门店，当前门店是可切换的请求期上下文](decisions/0006-user-shops-and-current-shop.md)
 - [0007 · 剩余开放问题决议：外部集成、前端框架归属、编排平台部署、跨店差额、审计日志保留](decisions/0007-remaining-open-questions.md)（修订 0004 第 3 节第 3 条）
 - [0008 · NQ 全部决议、详细设计冻结与 R1 运行基线](decisions/0008-design-freeze-and-nq-resolutions.md)（修订 0006 / 0007 的历史状态）
+- [0009 · 队列与服务人员（主页默认队列视图，受控扩展 R1）](decisions/0009-queues-and-staff.md)
+- [0010 · 服务人员在岗状态与队列内顺序（第二次受控扩展）](decisions/0010-duty-status-and-queue-order.md)
 
 后续选型在 `docs/decisions/` 下按 `NNNN-标题.md` 递增记录，模板：
 
@@ -157,7 +159,7 @@ R0 引导骨架仅用标准库提供 `/health`，零外部依赖，作为 CI 基
 
 ## 10. 详细设计
 
-前期系统架构详细设计在 [`design/00-overview.md`](design/00-overview.md)，**已冻结**（ADR-0008），共 10 册：
+前期系统架构详细设计在 [`design/00-overview.md`](design/00-overview.md)，**已冻结**（ADR-0008），共 11 册：
 
 | 册 | 内容 |
 |---|---|
@@ -171,5 +173,6 @@ R0 引导骨架仅用标准库提供 `/health`，零外部依赖，作为 CI 基
 | [07 部署与运行基线](design/07-deployment-and-operations.md) | Docker 2+2、Go Job 与数据库共享、连接池预算、advisory lock 例子、容量阈值、压测基线 |
 | [08 审计日志保留与清理](design/08-audit-retention.md) | 保留天数默认规则、UTC+8 自然日窗口、超期错误契约、运行痕迹与告警 |
 | [09 跨店差额与清分边界](design/09-cross-shop-difference.md) | 差额来源、按店分组呈现、不做自动清分的理由与未来启用条件 |
+| [10 队列与服务人员](design/10-queues-and-staff.md) | 一店多队列（序号+名称）、店内多队列分配、在岗状态与队列内顺序、主页默认队列视图 |
 
-该套文档**已由 [ADR-0008](decisions/0008-design-freeze-and-nq-resolutions.md) 冻结**，以本文与八份 ADR 为上游约束。**OQ-01–08、NQ-01–16 与 DP-01–07 全部关闭**（`00` 第 8 节）。冻结后，任何改动 schema、唯一性范围、隔离条件、状态机、错误语义、端点清单，或 `07`–`09` 中固定的副本数 / 连接池 / 保留天数 / 清理窗口基线的 PR，必须**先改设计或 ADR 再改代码**并同步对应分册；只改实现、不改契约的 PR 不需要改设计文档。
+该套文档**已由 [ADR-0008](decisions/0008-design-freeze-and-nq-resolutions.md) 冻结**，以本文与 `docs/decisions/` 下已接受的 ADR 为上游约束。**OQ-01–08、NQ-01–16 与 DP-01–07 全部关闭**（`00` 第 8 节）。冻结后，任何改动 schema、唯一性范围、隔离条件、状态机、错误语义、端点清单，或 `07`–`09` 中固定的副本数 / 连接池 / 保留天数 / 清理窗口基线的 PR，必须**先改设计或 ADR 再改代码**并同步对应分册；只改实现、不改契约的 PR 不需要改设计文档。

@@ -195,5 +195,6 @@ internal/
 | [07 部署与运行基线](07-deployment-and-operations.md) | Docker 2+2、Go Job 与数据库共享、连接池预算、advisory lock 例子、容量阈值、压测基线 | 后端 / 运维 |
 | [08 审计日志保留与清理](08-audit-retention.md) | 保留天数默认规则、UTC+8 自然日窗口、超期错误契约、清理运行痕迹与告警 | 后端 / 运维 |
 | [09 跨店差额与清分边界](09-cross-shop-difference.md) | 差额来源、按店分组呈现、为何不做自动清分、未来启用条件 | 后端 / 评审 |
+| [10 队列与服务人员](10-queues-and-staff.md) | 一店多队列（序号+名称）、服务人员店内多队列分配、在岗状态与队列内顺序、主页默认队列视图（ADR-0009 / 0010 扩展） | 前后端 / 评审 |
 
-**变更规则**：本套设计已由 [ADR-0008](../decisions/0008-design-freeze-and-nq-resolutions.md) 冻结。任何改动 schema、唯一性范围、隔离条件、状态机、错误语义、端点清单或 `07`–`09` 中固定数值基线的 PR，必须**先改设计 / ADR 再改代码**，同时更新对应分册并在 PR 描述里指出影响章节；只改实现、不改契约的 PR 不需要改设计文档。
+**变更规则**：本套设计已由 [ADR-0008](../decisions/0008-design-freeze-and-nq-resolutions.md) 冻结；受控扩展依次为 [ADR-0009](../decisions/0009-queues-and-staff.md)（队列 / 服务人员）与 [ADR-0010](../decisions/0010-duty-status-and-queue-order.md)（在岗状态 / 队列内顺序），均落在 `10` 分册。任何改动 schema、唯一性范围、隔离条件、状态机、错误语义、端点清单或 `07`–`09` 中固定数值基线的 PR，必须**先改设计 / ADR 再改代码**，同时更新对应分册并在 PR 描述里指出影响章节；只改实现、不改契约的 PR 不需要改设计文档。
