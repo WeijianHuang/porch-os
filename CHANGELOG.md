@@ -6,6 +6,7 @@
 
 ### 新增
 
+- **ADR-0011 + `design/11`（第三次受控扩展冻结契约）**：新增房间与楼层领域——门店房间（房间号 `(shop_id, code)` 店内唯一 + 名称），楼层为房间整数属性 `floor`（`-5..200`，可负表示地下、非独立实体），列表按 `floor, code` 升序返回、前端按楼层分组展示；R1 首批端点追加 `rooms` 组，权限点 `room.read` / `room.write`，迁移 `00006_rooms.sql`，`EXPECTED_SCHEMA_VERSION` 升为 `6`。
 - **ADR-0010 + `design/10`（第二次受控扩展冻结契约）**：服务人员新增 `duty_status`（`on` / `off`，当前状态位、无考勤流水），`queue_staff` 新增 `position`（队列内密集 1..n，唯一 `(queue_id, position)`）；`PATCH /staff/{staffId}` 支持在岗切换，`PUT /queues/{queueId}/staff/order` 以全量有序 `staff_ids` + `queues.version` 原子重排；`EXPECTED_SCHEMA_VERSION` 升为 `5`。
 - **ADR-0009 + `design/10`（受控扩展冻结契约）**：新增队列与服务人员领域——一店多队列（序号 + 名称，门店内各自唯一）、服务人员在**本店**多个队列服务（M:N 关联表 + 复合外键锁同店）、前端主页默认队列视图；R1 首批端点追加 `queues` / `staff` / `queue-staff` 三组，权限点 `queue.read` / `queue.write`。
 

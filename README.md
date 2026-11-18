@@ -125,9 +125,9 @@ curl -s localhost:8080/health   # {"status":"ok"}
 cmd/porch-os/       R0 引导程序（/health）与单测
 docs/               架构原则、详细设计、本地环境、决策记录
   ARCHITECTURE.md   隔离模型、分层、技术栈落地与稳健性原则
-  design/           前期详细设计 00–10（总览 / 领域 / 数据库 / 接口 / 应用架构 / 横切 / 流程 / 部署 / 审计 / 跨店差额 / 队列与服务人员）
+  design/           前期详细设计 00–11（总览 / 领域 / 数据库 / 接口 / 应用架构 / 横切 / 流程 / 部署 / 审计 / 跨店差额 / 队列与服务人员 / 房间与楼层）
   LOCAL-DEV.md      本地 PostgreSQL 启动、验证与重置
-  decisions/        ADR：0001 数据库、0002 后端技术栈、0003 仅门店层隔离、0004 范围基线、0005 取消门店组、0006 用户-门店关系与切换、0007 剩余开放问题决议、0008 设计冻结与运行基线
+  decisions/        ADR：0001 数据库、0002 后端技术栈、0003 仅门店层隔离、0004 范围基线、0005 取消门店组、0006 用户-门店关系与切换、0007 剩余开放问题决议、0008 设计冻结与运行基线、0009 队列与服务人员、0010 在岗状态与队列顺序、0011 房间与楼层
 go.mod              Go 模块定义（当前零外部依赖）
 docker-compose.yml  本地数据库（PostgreSQL 18.7）
 .env.example        配置占位（仅示例值）
@@ -142,7 +142,7 @@ CHANGELOG.md        变更记录
 Prerequisites: Go 1.23+ and a running PostgreSQL 18.7 (`docker compose up -d db`).
 
 ```bash
-cp .env.example .env          # set DATABASE_URL / JWT_SECRET / EXPECTED_SCHEMA_VERSION=5
+cp .env.example .env          # set DATABASE_URL / JWT_SECRET / EXPECTED_SCHEMA_VERSION=6
 go run ./cmd/job migrate      # the ONLY process allowed to change the schema
 SEED_LOGIN=admin SEED_PASSWORD=<local-password> go run ./cmd/job seed-user
 go run ./cmd/api              # /health and /ready on PORT (default 8080)
@@ -167,6 +167,7 @@ nor `worker` runs migrations at startup.
 | `docs/design/01`–`06` | 领域模型 / 数据库设计 / 接口设计 / 应用架构 / 横切机制 / 关键流程 |
 | `docs/design/07`–`09` | 部署与运行基线 / 审计日志保留与清理 / 跨店差额与清分边界 |
 | `docs/design/10` | 队列与服务人员（一店多队列、店内多队列分配、在岗状态与队列内顺序、主页默认队列视图） |
+| `docs/design/11` | 房间与楼层（房间号店内唯一 + 名称、楼层整数属性、按楼层分组展示） |
 | `docs/LOCAL-DEV.md` | 本地数据库与引导程序的启动、验证与重置 |
 | `docs/decisions/0001-postgresql-18.md` | 为什么选 PG 18.7、代价与复审条件 |
 | `docs/decisions/0002-go-backend-stack.md` | 为什么选 Go + SQL 优先、评审阻断项与不选什么 |
@@ -177,6 +178,7 @@ nor `worker` runs migrations at startup.
 | `docs/decisions/0007-remaining-open-questions.md` | 剩余开放问题决议：外部集成、前端框架归属、编排平台部署、跨店差额、审计日志 30 天保留（其遗留的 NQ-01–16 已由 [ADR-0008](docs/decisions/0008-design-freeze-and-nq-resolutions.md) 全部关闭） |
 | `docs/decisions/0009-queues-and-staff.md` | 队列 / 服务人员领域扩展、主页默认队列视图（受控扩展 R1） |
 | `docs/decisions/0010-duty-status-and-queue-order.md` | 服务人员在岗状态与队列内顺序（第二次受控扩展，schema 版本 5） |
+| `docs/decisions/0011-rooms-and-floors.md` | 房间与楼层（第三次受控扩展，schema 版本 6） |
 | `docs/decisions/0008-design-freeze-and-nq-resolutions.md` | NQ-01–16 全部决议、DP-01–07 接受、详细设计冻结、R1 范围与验收、Docker 2+2 / Go Job / 连接池 / 审计 / 容量基线 |
 | `CONTRIBUTING.md` | 分支、提交与 PR 约定 |
 | `CHANGELOG.md` | 变更记录 |

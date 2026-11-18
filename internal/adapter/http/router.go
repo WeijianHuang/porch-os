@@ -97,6 +97,14 @@ func NewRouter(store *postgres.Store, cfg config.Config) *gin.Engine {
 			one.GET("/staff/:staffId", h.GetStaff)
 			one.PATCH("/staff/:staffId", h.UpdateStaff)
 			one.DELETE("/staff/:staffId", h.DeleteStaff)
+
+			// Rooms and floors (ADR-0011 / design/11): shop-scoped, one room has
+			// a shop-local code and an integer floor grouping dimension.
+			one.GET("/rooms", h.ListRooms)
+			one.POST("/rooms", h.CreateRoom)
+			one.GET("/rooms/:roomId", h.GetRoom)
+			one.PATCH("/rooms/:roomId", h.UpdateRoom)
+			one.DELETE("/rooms/:roomId", h.DeleteRoom)
 		}
 	}
 	return r
