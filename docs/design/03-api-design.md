@@ -188,6 +188,8 @@
 | queue | `GET /api/v1/shops/{shopId}/queues/{queueId}/staff` | 队列内服务人员（按 `position` 升序） |
 | queue | `PUT / DELETE /api/v1/shops/{shopId}/queues/{queueId}/staff/{staffId}` | 加入（追加到队尾）/ 移出（剩余位置压缩，幂等） |
 | queue | `PUT /api/v1/shops/{shopId}/queues/{queueId}/staff/order` | 队列内全量重排：`{staff_ids, version}`，成功回传新队列详情，409 版本冲突 |
+| room（[ADR-0011](../decisions/0011-rooms-and-floors.md)） | `GET / POST /api/v1/shops/{shopId}/rooms` | 房间列表（按 `floor, code` 升序）/ 新建：`{floor, code, name}` |
+| room | `GET / PATCH / DELETE /api/v1/shops/{shopId}/rooms/{roomId}` | 房间详情 / 修改（`{floor?, code?, name?, status?, version}`，409 版本冲突）/ 删除 |
 | order | `POST /api/v1/shops/{shopId}/orders` | 开单（`draft`） |
 | order | `GET /api/v1/shops/{shopId}/orders` | 单据列表（keyset 分页） |
 | order | `GET /api/v1/shops/{shopId}/orders/{id}` | 单据详情（含明细） |

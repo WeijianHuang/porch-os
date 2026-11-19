@@ -93,3 +93,5 @@ curl -s localhost:8080/health     # {"status":"ok"}
 - 数据存放在 Compose 命名卷 `pgdata`（实际卷名带项目名前缀），不在仓库目录内。
 - `.env`、数据库导出与备份一律不提交；CI 的 `hygiene` job 会拦截这类文件。
 - 本地实例只用于开发，不要写入任何真实经营数据。
+
+------------
