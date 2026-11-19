@@ -105,6 +105,25 @@ func NewRouter(store *postgres.Store, cfg config.Config) *gin.Engine {
 			one.GET("/rooms/:roomId", h.GetRoom)
 			one.PATCH("/rooms/:roomId", h.UpdateRoom)
 			one.DELETE("/rooms/:roomId", h.DeleteRoom)
+
+			// Scheduling engine (ADR-0012 / design/12): shop-scoped, reuses staff
+			// as executors and queue_staff.position as queue-local position.
+			one.GET("/scheduling/board", h.SchedulingBoard)
+			one.GET("/scheduling/rules", h.SchedulingRules)
+			one.GET("/scheduling/policies", h.SchedulingPolicies)
+			one.GET("/scheduling/task-types", h.SchedulingTaskTypes)
+			one.GET("/scheduling/events", h.SchedulingEvents)
+			one.GET("/scheduling/audit", h.SchedulingAudit)
+			one.POST("/scheduling/dispatch", h.SchedulingDispatch)
+			one.POST("/scheduling/pins", h.SchedulingPin)
+			one.DELETE("/scheduling/pins", h.SchedulingUnpin)
+			one.POST("/scheduling/pins/release-expired", h.SchedulingReleaseExpired)
+			one.PUT("/scheduling/rules", h.SchedulingPublishRules)
+			one.PUT("/scheduling/policies", h.SchedulingPublishPolicies)
+			one.POST("/scheduling/events/:eventId/restore", h.schedulingEventAction("restore"))
+			one.POST("/scheduling/events/:eventId/cancel", h.schedulingEventAction("cancel"))
+			one.POST("/scheduling/events/:eventId/complete", h.schedulingEventAction("complete"))
+			one.POST("/scheduling/events/:eventId/assignment-method", h.schedulingEventAction("assignment-method"))
 		}
 	}
 	return r

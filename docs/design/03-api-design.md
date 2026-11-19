@@ -190,6 +190,16 @@
 | queue | `PUT /api/v1/shops/{shopId}/queues/{queueId}/staff/order` | 队列内全量重排：`{staff_ids, version}`，成功回传新队列详情，409 版本冲突 |
 | room（[ADR-0011](../decisions/0011-rooms-and-floors.md)） | `GET / POST /api/v1/shops/{shopId}/rooms` | 房间列表（按 `floor, code` 升序）/ 新建：`{floor, code, name}` |
 | room | `GET / PATCH / DELETE /api/v1/shops/{shopId}/rooms/{roomId}` | 房间详情 / 修改（`{floor?, code?, name?, status?, version}`，409 版本冲突）/ 删除 |
+| scheduling（[ADR-0012](../decisions/0012-scheduling-engine.md)） | `GET /api/v1/shops/{shopId}/scheduling/board` | 调度看板：队列 + 成员位次 + 执行者状态 |
+| scheduling | `GET / POST /api/v1/shops/{shopId}/scheduling/rules` | 判定链读取 / 发布新版本 |
+| scheduling | `GET / PUT /api/v1/shops/{shopId}/scheduling/policies` | 联动策略读取 / 发布 |
+| scheduling | `GET /api/v1/shops/{shopId}/scheduling/task-types` | 任务类型列表 |
+| scheduling | `GET /api/v1/shops/{shopId}/scheduling/events` | 派单事件与决策摘要 |
+| scheduling | `GET /api/v1/shops/{shopId}/scheduling/audit` | 审计流水（append-only） |
+| scheduling | `POST /api/v1/shops/{shopId}/scheduling/dispatch` | 派单：决策 + 联动单事务提交 |
+| scheduling | `POST / DELETE /api/v1/shops/{shopId}/scheduling/pins` | 置顶 / 解除置顶（逐队列） |
+| scheduling | `POST /api/v1/shops/{shopId}/scheduling/pins/release-expired` | 到期 / 不可用自动释放 |
+| scheduling | `POST /api/v1/shops/{shopId}/scheduling/events/{eventId}/{action}` | `restore` 回原位 / `cancel` 取消 / `complete` 完成 / `assignment-method` 指派方式变更 |
 | order | `POST /api/v1/shops/{shopId}/orders` | 开单（`draft`） |
 | order | `GET /api/v1/shops/{shopId}/orders` | 单据列表（keyset 分页） |
 | order | `GET /api/v1/shops/{shopId}/orders/{id}` | 单据详情（含明细） |

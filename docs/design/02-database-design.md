@@ -49,6 +49,11 @@
 | queue | `staff` | B | 门店服务人员（店内雇员，可在本店多队列服务；`duty_status` 表示当前在岗 / 下班，无历史） | `(shop_id, code)` / `public_id` |
 | queue | `queue_staff` | B | 服务人员 ↔ 队列（店内多对多，复合外键锁同店；`position` 为队列内密集 1..n 顺序） | `(queue_id, staff_id)` / `(queue_id, position)` |
 | room（[ADR-0011](../decisions/0011-rooms-and-floors.md)） | `rooms` | B | 门店房间（`floor` 整数 `-5..200` 为分组维度，非实体；房间号店内唯一） | `(shop_id, code)` / `public_id` |
+| scheduling（[ADR-0012](../decisions/0012-scheduling-engine.md)） | `scheduling_rules` | B | 8 步判定链规则（顺序 / 开关 / 作用域 / 命中动作 / 时段可配） | `(shop_id, type, scope, scope_id)` / `public_id` |
+| scheduling | `scheduling_policies` | B | 联动策略（六种传播模式 + 逐队列动作映射，绑定主队列） | `(shop_id, primary_queue_id)` / `public_id` |
+| scheduling | `scheduling_task_types` | B | 任务类型（分组 + 不轮转标记） | `(shop_id, code)` / `public_id` |
+| scheduling | `scheduling_events` | B | 派单事件与决策摘要（幂等锚点） | `(shop_id, public_id)` |
+| scheduling | `scheduling_snapshots` | B | 一次事件的各队列位次前后快照 | `(shop_id, event_id)` |
 | member | `member_visits` | B | 到店记录 | `(shop_id, public_id)` |
 | order | `shifts` | B | 收银班次 | `(shop_id, shift_no)`；部分唯一：一店最多一个 `open` |
 | order | `orders` | B | 单据 | **`(shop_id, order_no)` 店内唯一** |

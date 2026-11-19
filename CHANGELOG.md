@@ -6,6 +6,7 @@
 
 ### 新增
 
+- **ADR-0012 + `design/12`（第四次受控扩展冻结契约）**：将多队列调度规则引擎整合进本仓库（不再是独立项目），复用既有 `staff` 作为执行者、`queue_staff.position` 作为位次、`audit_logs` 作为审计、`idempotency_keys` 作为幂等；新增 8 步可配判定链 + 6 种联动 + 各自落位 + 逐队列置顶 + 执行者状态机，PG advisory lock 做执行者互斥，全部落表可配置可回溯；迁移 `00007_scheduling_engine.sql`，`EXPECTED_SCHEMA_VERSION` 升为 `7`，权限点 `scheduling.read` / `scheduling.write`。术语合规：通用词入项目，敏感词对照表不入库，扫描零命中；前端 `porch-console` 并入调度台四页面与 ADR-0004。
 - **ADR-0011 + `design/11`（第三次受控扩展冻结契约）**：新增房间与楼层领域——门店房间（房间号 `(shop_id, code)` 店内唯一 + 名称），楼层为房间整数属性 `floor`（`-5..200`，可负表示地下、非独立实体），列表按 `floor, code` 升序返回、前端按楼层分组展示；R1 首批端点追加 `rooms` 组，权限点 `room.read` / `room.write`，迁移 `00006_rooms.sql`，`EXPECTED_SCHEMA_VERSION` 升为 `6`。
 - **ADR-0010 + `design/10`（第二次受控扩展冻结契约）**：服务人员新增 `duty_status`（`on` / `off`，当前状态位、无考勤流水），`queue_staff` 新增 `position`（队列内密集 1..n，唯一 `(queue_id, position)`）；`PATCH /staff/{staffId}` 支持在岗切换，`PUT /queues/{queueId}/staff/order` 以全量有序 `staff_ids` + `queues.version` 原子重排；`EXPECTED_SCHEMA_VERSION` 升为 `5`。
 - **ADR-0009 + `design/10`（受控扩展冻结契约）**：新增队列与服务人员领域——一店多队列（序号 + 名称，门店内各自唯一）、服务人员在**本店**多个队列服务（M:N 关联表 + 复合外键锁同店）、前端主页默认队列视图；R1 首批端点追加 `queues` / `staff` / `queue-staff` 三组，权限点 `queue.read` / `queue.write`。

@@ -47,8 +47,12 @@ func mapCode(code string) (int, bool) {
 		return http.StatusUnauthorized, false
 	case "PERMISSION_DENIED":
 		return http.StatusForbidden, false
-	case "NOT_FOUND":
+	case "NOT_FOUND", "SNAPSHOT_MISSING", "EVENT_NOT_FOUND", "TASK_TYPE_NOT_FOUND":
 		return http.StatusNotFound, false
+	case "EXECUTOR_BUSY":
+		return http.StatusConflict, false
+	case "NO_PRIMARY_QUEUE", "INVALID_STATE", "EXECUTOR_NOT_FOUND", "SITE_NOT_FOUND", "QUEUE_NOT_FOUND", "AUDIT_ACTOR_MISSING":
+		return http.StatusBadRequest, false
 	case "CONFLICT", "IDEMPOTENCY_CONFLICT", "IDEMPOTENCY_IN_PROGRESS", "VERSION_CONFLICT":
 		return http.StatusConflict, code == "IDEMPOTENCY_IN_PROGRESS" || code == "VERSION_CONFLICT"
 	case "PRECONDITION_FAILED":
