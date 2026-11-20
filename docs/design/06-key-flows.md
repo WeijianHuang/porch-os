@@ -65,7 +65,7 @@ Client ──► API 中间件 ──► Usecase ──► Domain(纯函数) ─
 | a | `SELECT ... FOR UPDATE orders WHERE shop_id=$1 AND id=$2 AND version=$3` | 门店 + 乐观锁双条件 |
 | b | `CanTransition(pending_payment → paid)` | 非法 → `412` |
 | c | 校验支付方式组合与合计；每种方式生成一个 `payment_entries` | 合计必须等于应付 |
-| d | `INSERT payments` + `payment_entries` | 复合外键保证同店 |
+| d | `INSERT payments(kind='sale', order_id, shift_id, operator_id, ...)` + `payment_entries` | 复合外键保证同店；`shift_id`/`operator_id` 是本次收款动作的归属（只持 ID） |
 | e | 会员余额扣减：`UPDATE ... SET balance = balance - $a WHERE shop_id=$1 AND member_id=$2 AND balance >= $a` | 影响 0 行 → 余额不足 |
 | f | 库存扣减：条件更新，不允许负库存 | 影响 0 行 → 库存不足 |
 | g | 更新 `orders.paid_amount` / `status=paid` / `version+1` | 与 a 同一事务 |
@@ -97,8 +97,9 @@ paid ──► refunding ──► refunded（全额）
                  └──► partially_refunded（部分）
 ```
 
-1. 校验：原单处于 `paid` / `completed` / `partially_refunded`；累计退款 ≤ 原支付额。
-2. 事务：`INSERT refunds`、`UPDATE orders` 状态与 `version`、按原 `payment_entries` 反向回滚会员余额与库存、写反向流水、写 `refund.succeeded` 与 `shop.summary_dirty` 事件、写幂等记录。
+1. 校验：原单处于 `paid` / `completed` / `partially_refunded`；原支付 `payments.status = 'succeeded'`。
+2. 事务：对同一 `payment_id` 加锁 → 汇总既有 `succeeded` 退款额并校验累计 ≤ 原支付额 → `INSERT refunds(payment_id, order_id, shift_id, operator_id, amount, reason)` → `UPDATE orders` 状态与 `version`、按原 `payment_entries` 反向回滚会员余额与库存、写反向流水、写 `refund.succeeded` 与 `shop.summary_dirty` 事件、写幂等记录。
+3. **退款单的 `shift_id` / `operator_id` 记录退款动作发生时的班次与操作人，不继承原订单**——已支付订单常在另一班次、由另一人退款（ADR-0013）。`shift_id`/`operator_id` 只持 ID、不加外键。
 3. **不修改原单金额、不删除明细、不回退到 `open`**（DP-05）：已支付单据是审计事实。
 4. 更正错误单据 = 退款 + 新建一张正确单据，两张单都能在报表里追溯。
 5. 部分退款后仍可再次退款，直到累计额达到上限；每次都是独立幂等事务。
@@ -107,7 +108,7 @@ paid ──► refunding ──► refunded（全额）
 
 | 流程 | 步骤 | 关键点 |
 |---|---|---|
-| 充值 | 事务：`member_balances(shop_id, member_id)` 条件 upsert → 写 `balance_ledger` → 写 `payments` → 事件 + 幂等 | 会员档案全局唯一，**余额按店独立** |
+| 充值 | 事务：`member_balances(shop_id, member_id)` 条件 upsert → 写 `balance_ledger` → 写 `payments(kind='topup', order_id=NULL, member_id=<id>, shift_id, operator_id)` → 事件 + 幂等 | 会员档案全局唯一，**余额按店独立**；充值**不挂订单**，由 `ck_payments_kind_ref` 约束（ADR-0013） |
 | 本店消费 | 与 F-01 阶段 D 的 e/h 相同 | 只在当前 `shop_id` 记账 |
 | 跨店核销 | 显式动作：校验两家店都在主体可见集合内 + 单独权限 → 一个事务里在 A 店写一条出账流水、B 店写一条入账流水，用同一个 `transfer_ref` 关联 → 事件 + 幂等 | 不修改会员档案归属、不提权；**不做自动清分**（OQ-07 已由 ADR-0007 关闭），差额只在按店分组的报表呈现，不生成往来账 / 结算单 |
 

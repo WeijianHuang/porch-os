@@ -59,9 +59,9 @@
 | order | `orders` | B | 单据 | **`(shop_id, order_no)` 店内唯一** |
 | order | `order_lines` | B | 单据明细（价格快照） | `(shop_id, order_id, line_no)` |
 | order | `price_adjustments` | B | 整单折扣/抹零（已分摊到行） | `(shop_id, order_id, seq)` |
-| order | `payments` | B | 一次收款 | `(shop_id, idempotency_key)` |
-| order | `payment_entries` | B | 组合支付的一笔 | `(shop_id, payment_id, seq)` |
-| order | `refunds` | B | 退款单 | `(shop_id, refund_no)` |
+| order | `payments` | B | 收款（`kind` = `sale` / `topup` / `other`；`sale` 挂订单、`topup` 挂会员） | `(shop_id, idempotency_key)`；`sale` 另受 `(shop_id, order_id)` 外键 |
+| order | `payment_entries` | B | 组合支付的一笔（逐渠道） | `(shop_id, payment_id, seq)` |
+| order | `refunds` | B | 退款单（自带退款班次 / 操作人） | `(shop_id, refund_no)` |
 | inventory | `inventory_balances` | B | 按店库存 | `(shop_id, catalog_item_id)` |
 | inventory | `stock_movements` | B | 出入库流水（只追加） | `(shop_id, public_id)` |
 | inventory | `stock_transfers` | B | 跨店调拨单（显式动作） | `(shop_id, transfer_no)` |
@@ -77,7 +77,7 @@
 
 ## 3. 核心 DDL（PG 18.7 语法示例）
 
-以下示例刻意包含「复合外键把 `shop_id` 钉死」这一关键手法：明细无法通过外键挂到别家店的单据上。
+以下示例刻意包含「复合外键把 `shop_id` 钉死」这一关键手法：明细无法通过外键挂到别家店的单据上。订单域的收款 / 退款按 [ADR-0013](decisions/0013-payment-and-refund-ownership.md) 定义：`payments.kind` 区分销售 / 充值 / 其他，`sale` 与 `topup` 由 CHECK 约束钉死订单 / 会员的填法；`payments` 与 `refunds` 的 `shift_id` / `operator_id` 记录动作发生时的班次与操作人（只持 ID、不加外键），退款归属不继承订单。
 
 ```sql
 -- +goose Up
@@ -194,11 +194,16 @@ CREATE TABLE order_lines (
 );
 CREATE INDEX idx_order_lines_shop_order ON order_lines (shop_id, order_id);
 
+-- 收款：kind 区分销售 / 充值 / 其他（ADR-0013）；order_id 仅 sale 必填
 CREATE TABLE payments (
   id               bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   shop_id          bigint      NOT NULL,
   public_id        uuid        NOT NULL DEFAULT uuidv7(),
-  order_id         bigint      NOT NULL,
+  kind             text        NOT NULL DEFAULT 'sale',
+  order_id         bigint,                       -- 由 NOT NULL 改为可空
+  member_id        bigint,                       -- topup 必填（CHECK 约束保证）
+  shift_id         bigint,                       -- 收款动作发生时所在班次，只持 ID
+  operator_id      bigint      NOT NULL,          -- 收款操作人（登录账号），只持 ID
   status           text        NOT NULL DEFAULT 'pending',
   amount           numeric(14,2) NOT NULL,
   idempotency_key  text        NOT NULL,
@@ -207,9 +212,80 @@ CREATE TABLE payments (
   CONSTRAINT uq_payments_idem       UNIQUE (shop_id, idempotency_key),
   CONSTRAINT fk_payments_order      FOREIGN KEY (shop_id, order_id)
               REFERENCES orders (shop_id, id),
-  CONSTRAINT ck_payments_status     CHECK (status IN ('pending','succeeded','failed'))
+  CONSTRAINT ck_payments_status     CHECK (status IN ('pending','succeeded','failed')),
+  CONSTRAINT ck_payments_kind       CHECK (kind IN ('sale','topup','other')),
+  CONSTRAINT ck_payments_kind_ref   CHECK (
+    (kind = 'sale'  AND order_id IS NOT NULL) OR
+    (kind = 'topup' AND order_id IS NULL AND member_id IS NOT NULL) OR
+    (kind = 'other' AND order_id IS NULL)
+  )
 );
-CREATE INDEX idx_payments_shop_created ON payments (shop_id, created_at DESC);
+CREATE INDEX idx_payments_shop_created  ON payments (shop_id, created_at DESC);
+CREATE INDEX idx_payments_shop_shift    ON payments (shop_id, shift_id, created_at DESC);
+CREATE INDEX idx_payments_shop_operator ON payments (shop_id, operator_id, created_at DESC);
+CREATE INDEX idx_payments_shop_order    ON payments (shop_id, order_id);
+
+-- 组合支付：一次收款可按渠道拆多笔，合计等于 payments.amount
+CREATE TABLE payment_entries (
+  id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  shop_id     bigint      NOT NULL,
+  payment_id  bigint      NOT NULL,
+  seq         integer     NOT NULL,
+  method      text        NOT NULL,
+  amount      numeric(14,2) NOT NULL,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT uq_payment_entries_shop_payment_seq UNIQUE (shop_id, payment_id, seq),
+  CONSTRAINT fk_payment_entries_payment FOREIGN KEY (shop_id, payment_id)
+              REFERENCES payments (shop_id, id),
+  CONSTRAINT ck_payment_entries_method CHECK (method IN ('cash','card','balance','coupon')),
+  CONSTRAINT ck_payment_entries_amount CHECK (amount >= 0)
+);
+CREATE INDEX idx_payment_entries_shop_payment ON payment_entries (shop_id, payment_id);
+
+-- 整单折扣 / 抹零：分摊到行由计价纯函数完成，表本身挂订单级
+CREATE TABLE price_adjustments (
+  id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  shop_id     bigint      NOT NULL,
+  order_id    bigint      NOT NULL,
+  seq         integer     NOT NULL,
+  amount      numeric(14,2) NOT NULL,
+  reason      text,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT uq_price_adjustments_shop_order_seq UNIQUE (shop_id, order_id, seq),
+  CONSTRAINT fk_price_adjustments_order FOREIGN KEY (shop_id, order_id)
+              REFERENCES orders (shop_id, id),
+  CONSTRAINT ck_price_adjustments_amount CHECK (amount >= 0)
+);
+CREATE INDEX idx_price_adjustments_shop_order ON price_adjustments (shop_id, order_id);
+
+-- 退款：shift_id / operator_id 是退款动作本身的归属，不继承订单（ADR-0013）
+CREATE TABLE refunds (
+  id               bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  shop_id          bigint      NOT NULL,
+  public_id        uuid        NOT NULL DEFAULT uuidv7(),
+  refund_no        text        NOT NULL,
+  payment_id       bigint      NOT NULL,
+  order_id         bigint      NOT NULL,
+  shift_id         bigint,                       -- 退款动作发生时的班次（不继承订单）
+  operator_id      bigint      NOT NULL,          -- 退款操作人（登录账号）
+  amount           numeric(14,2) NOT NULL,
+  status           text        NOT NULL DEFAULT 'pending',
+  reason           text,
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT uq_refunds_shop_no     UNIQUE (shop_id, refund_no),
+  CONSTRAINT uq_refunds_public_id   UNIQUE (public_id),
+  CONSTRAINT uq_refunds_shop_id_id  UNIQUE (shop_id, id),
+  CONSTRAINT fk_refunds_payment     FOREIGN KEY (shop_id, payment_id)
+              REFERENCES payments (shop_id, id),
+  CONSTRAINT fk_refunds_order       FOREIGN KEY (shop_id, order_id)
+              REFERENCES orders (shop_id, id),
+  CONSTRAINT ck_refunds_status      CHECK (status IN ('pending','succeeded','failed')),
+  CONSTRAINT ck_refunds_amount      CHECK (amount > 0)
+);
+CREATE INDEX idx_refunds_shop_created  ON refunds (shop_id, created_at DESC);
+CREATE INDEX idx_refunds_shop_shift    ON refunds (shop_id, shift_id, created_at DESC);
+CREATE INDEX idx_refunds_shop_operator ON refunds (shop_id, operator_id, created_at DESC);
+CREATE INDEX idx_refunds_shop_payment  ON refunds (shop_id, payment_id);
 
 CREATE TABLE shifts (
   id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

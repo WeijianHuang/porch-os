@@ -6,7 +6,7 @@
 ## 1. 建模原则
 
 1. **结构体之间只持有 ID**，不嵌套对方实体；不建实体关联图（ADR-0002 阻断项 ①）。
-2. **聚合尽量小**：`Order` 是聚合根，`OrderLine` 属于它；`Payment` 独立聚合，通过 `order_id` 引用，不嵌进 `Order`。
+2. **聚合尽量小**：`Order` 是聚合根，`OrderLine` 属于它；`Payment` 独立聚合，销售收款通过可空 `order_id` 引用订单（充值收款不挂订单），不嵌进 `Order`（ADR-0013）。
 3. **领域层是纯函数与值对象**：计价、状态迁移、一对多折叠都放在 `internal/domain/`，可脱离数据库单测。
 4. **跨模块不共享聚合**：`order` 想知道会员余额，通过用例层调用 `member` 的接口，不直接读 `member_balances` 表。
 5. **不把业务口径写成数据库视图**：视图会让口径失去唯一来源且脱离版本控制（ADR-0002 阻断项 ③）。
@@ -20,8 +20,8 @@
 | `catalog` | `CatalogItem` | `Category`、`ShopCatalogOverride` | A 全局 + B 覆盖 | 目录全局唯一；价格/上下架按店覆盖，覆盖记录带 `shop_id` |
 | `member` | `Member` | `MemberBalance`、`BalanceLedger` | A 档案 + B 账 | 档案按手机号全局唯一；余额与流水按店独立 |
 | `order` | `Order` | `OrderLine`、`PriceAdjustment` | B | 单据与所有明细同属一个 `shop_id`；金额恒等于明细合计减调整 |
-| `order` | `Payment` | `PaymentEntry`（组合支付的一笔） | B | 支付总额不超过应付；每个 `PaymentEntry` 带支付方式与金额 |
-| `order` | `Refund` | — | B | 退款必须引用已成功的支付；累计退款不超过原支付 |
+| `order` | `Payment` | `PaymentEntry`（组合支付的一笔） | B | 「收款」是独立聚合根，按 `kind`（`sale` / `topup` / `other`）区分来源；`sale` 必挂订单、可多次尝试（`failed` 终态、重试新行留审计链）、组合支付逐渠道记录且合计等于收款额；`topup` 必挂会员且不挂订单（ADR-0013） |
+| `order` | `Refund` | — | B | 退款引用已成功的支付且不修改原单；累计退款不超过原支付；退款自带 `shift_id` / `operator_id`（退款动作的班次与操作人，不继承订单），常跨班次发生（ADR-0013） |
 | `order` | `Shift` | — | B | 一个门店同一时刻最多一个 `open` 班次（数据库部分唯一索引保证） |
 | `inventory` | `InventoryBalance` | `StockMovement`、`StockTransfer` | B | 余额 = 流水累计；不允许负库存（除非门店显式开启允许） |
 | `reporting` | `DailyShopSummary` | `ExportJob` | B / 派生 | 汇总可重算，重算结果与源流水一致 |
@@ -62,7 +62,7 @@
 
 **`OrderLine`**：`order_id`、`catalog_item_id`（只持 ID）、`quantity`、`unit_price`、`amount`、`line_no`。明细不随目录价格变动而回溯改写——下单时快照价格。
 
-**`Payment` / `PaymentEntry`**：一次收款可组合多种方式（现金、卡、余额、券），每个 `PaymentEntry` 记方式与金额，合计等于本次收款额。禁止把「组合支付」压成一个字符串字段。
+**`Payment` / `PaymentEntry`**：一次收款可组合多种方式（现金、卡、余额、券），每个 `PaymentEntry` 记方式与金额，合计等于本次收款额。禁止把「组合支付」压成一个字符串字段。`Payment` 以 `kind` 区分来源：`sale`（销售收款，`order_id` 必填，可多次尝试，失败终态、重试生成新行）、`topup`（会员充值，`order_id` 为空、`member_id` 必填）、`other`（其他收款，本期不开放端点）；三者由数据库 CHECK 约束钉死，不允许「有订单却是充值」的脏数据（ADR-0013）。`payments` 与 `refunds` 均带 `shift_id` / `operator_id`，记录**动作发生时**的班次与操作人（只持 ID、不建外键导航）；退款的归属不继承原订单，因为退款常发生在另一班次、由另一人操作。
 
 ## 5. 状态机
 

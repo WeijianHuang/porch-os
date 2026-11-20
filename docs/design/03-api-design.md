@@ -180,7 +180,7 @@
 | member | `GET / PATCH /api/v1/members/{id}` | 会员档案 |
 | member | `GET /api/v1/shops/{shopId}/members/{id}/balance` | 该店余额 |
 | member | `GET /api/v1/shops/{shopId}/members/{id}/ledger` | 该店余额流水 |
-| member | `POST /api/v1/shops/{shopId}/members/{id}/topups` | 充值（店内账） |
+| member | `POST /api/v1/shops/{shopId}/members/{id}/topups` | 充值（店内账）；落 `payments(kind='topup', order_id=NULL, member_id=<id>)`，带本次 `shift_id` / `operator_id`（ADR-0013） |
 | queue（[ADR-0009](../decisions/0009-queues-and-staff.md)） | `GET / POST /api/v1/shops/{shopId}/queues` | 队列列表（按 `seq` 升序）/ 新建（序号 + 名称） |
 | queue | `GET / PATCH / DELETE /api/v1/shops/{shopId}/queues/{queueId}` | 队列详情（含服务人员）/ 修改 / 删除 |
 | queue | `GET / POST /api/v1/shops/{shopId}/staff` | 服务人员列表 / 建档 |
@@ -206,11 +206,13 @@
 | order | `POST / DELETE /api/v1/shops/{shopId}/orders/{id}/lines` | 加项 / 删项 |
 | order | `POST /api/v1/shops/{shopId}/orders/{id}/submit` | 提交结账 → `pending_payment` |
 | order | `POST /api/v1/shops/{shopId}/orders/{id}/payments` | 组合支付 → `paid` |
-| order | `POST /api/v1/shops/{shopId}/orders/{id}/refunds` | 退款（生成退款单） |
+| order | `POST /api/v1/shops/{shopId}/orders/{id}/refunds` | 退款（生成退款单）；退款单记**退款动作发生时**的 `shift_id` / `operator_id`，不继承原单（ADR-0013） |
 | order | `POST /api/v1/shops/{shopId}/orders/{id}/cancel` | 取消未支付单据 |
 | order | `GET /api/v1/shops/{shopId}/shifts/current` | 当前班次 |
 | order | `POST /api/v1/shops/{shopId}/shifts/open` | 开班 |
 | order | `POST /api/v1/shops/{shopId}/shifts/{id}/close` | 关班结算 |
+
+> 收款 / 退款归属（[ADR-0013](decisions/0013-payment-and-refund-ownership.md)）：订单支付落 `payments(kind='sale', order_id=<id>)`，会员充值落 `kind='topup'` 且不写 `order_id`；两类收款都记录本次动作的 `shift_id` / `operator_id`。退款单自带退款时的班次与操作人（可与原单不同），累计退款不超过原支付额。班次 / 人员维度的统计从明细按需聚合，`daily_shop_summary` 粒度不变；本次不新增收款 / 退款专属端点。
 | inventory | `GET /api/v1/shops/{shopId}/inventory` | 库存余额 |
 | inventory | `POST /api/v1/shops/{shopId}/inventory/adjustments` | 出入库调整 |
 | inventory | `GET /api/v1/shops/{shopId}/inventory/movements` | 库存流水 |
