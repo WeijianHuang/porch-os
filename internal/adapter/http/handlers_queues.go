@@ -179,15 +179,6 @@ func (h *Handler) DeleteQueue(c *gin.Context) {
 
 // ---------- staff ----------
 
-func (h *Handler) ListStaff(c *gin.Context) {
-	v, err := h.Store.ListStaff(c.Request.Context(), nil, Current(c).ShopID)
-	if err != nil {
-		fail(c, pgErr(err))
-		return
-	}
-	ok(c, 200, v, nil)
-}
-
 func (h *Handler) CreateStaff(c *gin.Context) {
 	if !hasPerm(Current(c), "queue.write") {
 		fail(c, apierrors.PermissionDenied)

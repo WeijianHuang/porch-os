@@ -1,6 +1,7 @@
 package scheduling
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -148,5 +149,59 @@ func TestExecutorDispatchable(t *testing.T) {
 	e.State = StatePinned
 	if !e.IsDispatchable() {
 		t.Fatal("pinned executor still waits and can be dispatched")
+	}
+}
+
+func TestValidateManualTransition(t *testing.T) {
+	// The six documented targets are accepted from any idle state.
+	for _, target := range ManualTargets {
+		for _, from := range ManualTargets {
+			if from == target {
+				continue
+			}
+			if err := ValidateManualTransition(from, target); err != nil {
+				t.Fatalf("%s -> %s should be allowed, got %v", from, target, err)
+			}
+		}
+	}
+
+	// Engine-owned states cannot be set by hand.
+	for _, target := range []ExecutorState{StateExecuting, StateDesignatedOccupied, StateCrossGroupSupport} {
+		if err := ValidateManualTransition(StateAvailable, target); !errors.Is(err, ErrManualTarget) {
+			t.Fatalf("target %s must be rejected, got %v", target, err)
+		}
+	}
+
+	// A live event blocks every manual change.
+	for _, from := range []ExecutorState{StateExecuting, StateDesignatedOccupied, StateCrossGroupSupport} {
+		if err := ValidateManualTransition(from, StateOffDuty); !errors.Is(err, ErrExecutorBusy) {
+			t.Fatalf("%s must report busy, got %v", from, err)
+		}
+	}
+
+	// No-op changes are rejected so the caller does not write a hollow audit.
+	if err := ValidateManualTransition(StateAvailable, StateAvailable); !errors.Is(err, ErrStateUnchanged) {
+		t.Fatalf("same state must be rejected, got %v", err)
+	}
+
+	// Disabled staff can only be parked off duty.
+	if err := ValidateManualTransition(StateDisabled, StateOffDuty); err != nil {
+		t.Fatalf("disabled -> off_duty should be allowed, got %v", err)
+	}
+	if err := ValidateManualTransition(StateDisabled, StateAvailable); !errors.Is(err, ErrManualTransition) {
+		t.Fatalf("disabled -> available must be rejected, got %v", err)
+	}
+}
+
+func TestDutyForState(t *testing.T) {
+	for _, s := range []ExecutorState{StateLeave, StateOffDuty, StateDisabled} {
+		if got := DutyForState(s); got != "off" {
+			t.Fatalf("%s duty = %s, want off", s, got)
+		}
+	}
+	for _, s := range []ExecutorState{StateAvailable, StateStandby, StateTimeReserved, StateOvertime} {
+		if got := DutyForState(s); got != "on" {
+			t.Fatalf("%s duty = %s, want on", s, got)
+		}
 	}
 }

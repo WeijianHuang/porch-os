@@ -41,7 +41,7 @@ func WithDetails(e *APIError, details ...Detail) *APIError {
 
 func mapCode(code string) (int, bool) {
 	switch code {
-	case "INVALID_ARGUMENT", "SHOP_CONTEXT_REQUIRED", "AUDIT_RETENTION_WINDOW_EXCEEDED":
+	case "INVALID_ARGUMENT", "STATE_UNCHANGED", "SHOP_CONTEXT_REQUIRED", "AUDIT_RETENTION_WINDOW_EXCEEDED":
 		return http.StatusBadRequest, false
 	case "UNAUTHENTICATED":
 		return http.StatusUnauthorized, false

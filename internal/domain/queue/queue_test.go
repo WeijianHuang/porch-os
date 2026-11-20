@@ -109,3 +109,22 @@ func TestSortedQueuesNoMutation(t *testing.T) {
 		t.Fatalf("SortedQueues mutated input or wrong order: got %#v in %#v", got, in)
 	}
 }
+
+func TestMembershipsByStaffOrdersBySeqThenPosition(t *testing.T) {
+	rows := []Membership{
+		{StaffPublicID: "s1", QueuePublicID: "q2", QueueName: "Beta", QueueSeq: 2, Position: 1, PinType: "none"},
+		{StaffPublicID: "s1", QueuePublicID: "q1", QueueName: "Alpha", QueueSeq: 1, Position: 3, PinType: "permanent"},
+		{StaffPublicID: "s2", QueuePublicID: "q1", QueueName: "Alpha", QueueSeq: 1, Position: 1, PinType: "none"},
+	}
+	got := MembershipsByStaff(rows)
+	want := []StaffQueueRef{
+		{PublicID: "q1", Name: "Alpha", Seq: 1, Position: 3, PinType: "permanent"},
+		{PublicID: "q2", Name: "Beta", Seq: 2, Position: 1, PinType: "none"},
+	}
+	if !reflect.DeepEqual(got["s1"], want) {
+		t.Fatalf("MembershipsByStaff[s1]: got %#v want %#v", got["s1"], want)
+	}
+	if len(got["s2"]) != 1 || got["s2"][0].PublicID != "q1" {
+		t.Fatalf("MembershipsByStaff[s2]: got %#v", got["s2"])
+	}
+}

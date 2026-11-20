@@ -144,6 +144,7 @@ R0 引导骨架仅用标准库提供 `/health`，零外部依赖，作为 CI 基
 - [0010 · 服务人员在岗状态与队列内顺序（第二次受控扩展）](decisions/0010-duty-status-and-queue-order.md)
 - [0011 · 房间与楼层（第三次受控扩展）](decisions/0011-rooms-and-floors.md)
 - [0012 · 多队列调度规则引擎（第四次受控扩展，深度数据整合）](decisions/0012-scheduling-engine.md)
+- [0015 · 服务人员状态、轮转与位次人工控制（第七次受控扩展，无 schema 变更）](decisions/0015-staff-state-and-position-controls.md)
 
 后续选型在 `docs/decisions/` 下按 `NNNN-标题.md` 递增记录，模板：
 
@@ -178,5 +179,6 @@ R0 引导骨架仅用标准库提供 `/health`，零外部依赖，作为 CI 基
 | [10 队列与服务人员](design/10-queues-and-staff.md) | 一店多队列（序号+名称）、店内多队列分配、在岗状态与队列内顺序、主页默认队列视图 |
 | [11 房间与楼层](design/11-rooms-and-floors.md) | 门店房间（房间号店内唯一 + 名称）、楼层整数属性、按楼层分组展示（ADR-0011 扩展） |
 | [12 多队列调度规则引擎](design/12-scheduling-engine.md) | 复用 staff 作为执行者、8 步判定链 + 6 种联动 + 各自落位 + 逐队列置顶，PG 落表与审计（ADR-0012 扩展） |
+| [13 服务人员状态控制](design/13-staff-controls.md) | 8 个展示状态桶、6 个可人工设置状态、停止轮转、队列内移动位次、留位复用置顶（ADR-0015 扩展，无 schema 变更） |
 
 该套文档**已由 [ADR-0008](decisions/0008-design-freeze-and-nq-resolutions.md) 冻结**，以本文与 `docs/decisions/` 下已接受的 ADR 为上游约束。**OQ-01–08、NQ-01–16 与 DP-01–07 全部关闭**（`00` 第 8 节）。冻结后，任何改动 schema、唯一性范围、隔离条件、状态机、错误语义、端点清单，或 `07`–`09` 中固定的副本数 / 连接池 / 保留天数 / 清理窗口基线的 PR，必须**先改设计或 ADR 再改代码**并同步对应分册；只改实现、不改契约的 PR 不需要改设计文档。

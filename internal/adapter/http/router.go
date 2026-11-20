@@ -91,12 +91,18 @@ func NewRouter(store *postgres.Store, cfg config.Config) *gin.Engine {
 			one.PUT("/queues/:queueId/staff/order", h.ReorderQueueStaff)
 			one.PUT("/queues/:queueId/staff/:staffId", h.AssignStaff)
 			one.DELETE("/queues/:queueId/staff/:staffId", h.UnassignStaff)
+			// Single-member position shortcut (ADR-0015 §3.4).
+			one.POST("/queues/:queueId/staff/:staffId/move", h.MoveQueueStaff)
 
-			one.GET("/staff", h.ListStaff)
+			// GET /staff carries state + memberships for the staff wall.
+			one.GET("/staff", h.ListStaffSummaries)
 			one.POST("/staff", h.CreateStaff)
 			one.GET("/staff/:staffId", h.GetStaff)
 			one.PATCH("/staff/:staffId", h.UpdateStaff)
 			one.DELETE("/staff/:staffId", h.DeleteStaff)
+			// Operator controls on scheduling state / rotation (ADR-0015).
+			one.POST("/staff/:staffId/state", h.SetStaffState)
+			one.PATCH("/staff/:staffId/rotation", h.SetStaffRotation)
 
 			// Rooms and floors (ADR-0011 / design/11): shop-scoped, one room has
 			// a shop-local code and an integer floor grouping dimension.

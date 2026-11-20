@@ -36,6 +36,26 @@ type Assignment struct {
 	Position         int
 }
 
+// StaffQueueRef is one queue a staff member belongs to, with the queue-local
+// position and pin marker (ADR-0015). Rendered by the staff card menu.
+type StaffQueueRef struct {
+	PublicID string `json:"public_id"`
+	Name     string `json:"name"`
+	Seq      int    `json:"seq"`
+	Position int    `json:"position"`
+	PinType  string `json:"pin_type"`
+}
+
+// Membership is the flat row behind StaffQueueRef.
+type Membership struct {
+	StaffPublicID string
+	QueuePublicID string
+	QueueName     string
+	QueueSeq      int
+	Position      int
+	PinType       string
+}
+
 // ValidateQueue checks the queue input invariants (ADR-0009 §2).
 func ValidateQueue(seq int, name string) error {
 	if seq <= 0 {
@@ -146,6 +166,28 @@ func SortedQueues(refs []Ref) []Ref {
 		}
 		return out[i].Name < out[j].Name
 	})
+	return out
+}
+
+// MembershipsByStaff folds flat membership rows into staff -> queue refs,
+// ordered by queue sequence then position so the menu lists queues in the same
+// order the console shows them.
+func MembershipsByStaff(rows []Membership) map[string][]StaffQueueRef {
+	out := make(map[string][]StaffQueueRef)
+	for _, r := range rows {
+		out[r.StaffPublicID] = append(out[r.StaffPublicID], StaffQueueRef{
+			PublicID: r.QueuePublicID, Name: r.QueueName, Seq: r.QueueSeq,
+			Position: r.Position, PinType: r.PinType,
+		})
+	}
+	for id := range out {
+		sort.Slice(out[id], func(i, j int) bool {
+			if out[id][i].Seq != out[id][j].Seq {
+				return out[id][i].Seq < out[id][j].Seq
+			}
+			return out[id][i].Position < out[id][j].Position
+		})
+	}
 	return out
 }
 

@@ -188,6 +188,7 @@ nor `worker` runs migrations at startup.
 | `docs/decisions/0010-duty-status-and-queue-order.md` | 服务人员在岗状态与队列内顺序（第二次受控扩展，schema 版本 5） |
 | `docs/decisions/0011-rooms-and-floors.md` | 房间与楼层（第三次受控扩展，schema 版本 6） |
 | `docs/decisions/0012-scheduling-engine.md` | 多队列调度规则引擎深度整合（第四次受控扩展，复用 staff 作为执行者，schema 版本 7） |
+| `docs/decisions/0015-staff-state-and-position-controls.md` | 服务人员状态、停止轮转与位次人工控制（第七次受控扩展，无 schema 变更） |
 | `docs/decisions/0008-design-freeze-and-nq-resolutions.md` | NQ-01–16 全部决议、DP-01–07 接受、详细设计冻结、R1 范围与验收、Docker 2+2 / Go Job / 连接池 / 审计 / 容量基线 |
 | `CONTRIBUTING.md` | 分支、提交与 PR 约定 |
 | `CHANGELOG.md` | 变更记录 |

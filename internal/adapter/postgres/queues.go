@@ -117,33 +117,6 @@ func (s *Store) DeleteQueue(ctx context.Context, tx pgx.Tx, shopID, id int64) er
 
 // ---- staff ----
 
-func (s *Store) ListStaff(ctx context.Context, q DBTX, shopID int64) ([]Staff, error) {
-	if q == nil {
-		q = s.Pool
-	}
-	b := squirrel.Select(staffCols).From("staff").
-		Where(squirrel.Eq{"shop_id": shopID}).
-		OrderBy("display_name ASC", "code ASC").PlaceholderFormat(squirrel.Dollar)
-	sql, args, err := b.ToSql()
-	if err != nil {
-		return nil, err
-	}
-	rows, err := q.Query(ctx, sql, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]Staff, 0)
-	for rows.Next() {
-		v, err := scanStaff(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, v)
-	}
-	return out, rows.Err()
-}
-
 func (s *Store) StaffByPublicID(ctx context.Context, q DBTX, shopID int64, publicID string) (Staff, error) {
 	if q == nil {
 		q = s.Pool
