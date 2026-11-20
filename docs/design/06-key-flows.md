@@ -37,8 +37,9 @@ Client ──► API 中间件 ──► Usecase ──► Domain(纯函数) ─
 | 步 | 动作 | 失败 |
 |---|---|---|
 | 1 | 校验命令（门店在 scope 内、班次已开、操作人有效） | `400` / `403` / `409` |
-| 2 | 事务：`INSERT orders(draft, shop_id, operator_id, order_no)`；写 `order.created` 事件；写幂等记录 `completed` | 唯一冲突 → `409` |
-| 3 | 返回 `public_id` | — |
+| 2 | 用例层显式调用 `next_order_no(shop_id)` 生成单号（日期取 `business_date`，与日报 / 班次 / 汇总同口径，ADR-0014；序列表序列保证并发唯一）；`order_no` 无字面 DEFAULT，遗漏将触发 `NOT NULL` 错误 | 唯一冲突 → `409` |
+| 3 | 事务：`INSERT orders(draft, shop_id, operator_id, order_no)`；写 `order.created` 事件；写幂等记录 `completed` | 唯一冲突 → `409` |
+| 4 | 返回 `public_id` | — |
 
 ### 阶段 B｜加项 `draft → open`
 
@@ -68,7 +69,7 @@ Client ──► API 中间件 ──► Usecase ──► Domain(纯函数) ─
 | d | `INSERT payments(kind='sale', order_id, shift_id, operator_id, ...)` + `payment_entries` | 复合外键保证同店；`shift_id`/`operator_id` 是本次收款动作的归属（只持 ID） |
 | e | 会员余额扣减：`UPDATE ... SET balance = balance - $a WHERE shop_id=$1 AND member_id=$2 AND balance >= $a` | 影响 0 行 → 余额不足 |
 | f | 库存扣减：条件更新，不允许负库存 | 影响 0 行 → 库存不足 |
-| g | 更新 `orders.paid_amount` / `status=paid` / `version+1` | 与 a 同一事务 |
+| g | 更新 `orders.status=paid` / `version+1`（**不写 `paid_amount`**：订单只存不可变应付快照，实付从 payments 的 succeeded 行派生，ADR-0014） | 与 a 同一事务 |
 | h | 写 `balance_ledger` / `stock_movements`（只追加） | 流水与余额变动一一对应 |
 | i | 写 `idempotency_keys(completed, response_body)` | 与业务同事务 |
 | j | 写 `outbox_events`：`order.paid`、`payment.succeeded`、`shop.summary_dirty` | 事务外派发 |
@@ -93,16 +94,17 @@ Client ──► API 中间件 ──► Usecase ──► Domain(纯函数) ─
 ## F-02 退款（全额 / 部分）
 
 ```
-paid ──► refunding ──► refunded（全额）
-                 └──► partially_refunded（部分）
+paid / completed ──► refunded（全额）
+        └──────────► partially_refunded（部分）──► refunded（累计退完）
 ```
+无 `refunding` 态：退款在单个事务内完成，事务外只观测 `succeeded` / `failed`；失败整体回滚、订单状态不变（ADR-0014）。
 
-1. 校验：原单处于 `paid` / `completed` / `partially_refunded`；原支付 `payments.status = 'succeeded'`。
-2. 事务：对同一 `payment_id` 加锁 → 汇总既有 `succeeded` 退款额并校验累计 ≤ 原支付额 → `INSERT refunds(payment_id, order_id, shift_id, operator_id, amount, reason)` → `UPDATE orders` 状态与 `version`、按原 `payment_entries` 反向回滚会员余额与库存、写反向流水、写 `refund.succeeded` 与 `shop.summary_dirty` 事件、写幂等记录。
+1. 校验：原单处于 `paid` / `completed` / `partially_refunded`；原支付 `payments.status = 'succeeded'`；请求体显式携带 `refund_entries`（`method` + `amount`），断言 `Σ refund_entries.amount = amount`、每个 `method` 都在原支付 `payment_entries` 中出现。
+2. 事务：对同一 `payment_id` 加锁 → 汇总既有 `succeeded` 退款额并校验累计 ≤ 原支付额 → 对涉及的每个 `(payment_id, method)` 加锁、汇总该渠道累计退款并校验 ≤ 该渠道原支付额（超限 → `409`，由前端 / 客户协商，**不自动改派或按比例分摊**）→ `INSERT refunds(payment_id, order_id, shift_id, operator_id, amount, reason)` 与 `INSERT refund_entries` → `UPDATE orders` 状态与 `version`、按原 `payment_entries` 反向回滚会员余额与库存、写反向流水、写 `refund.succeeded` 与 `shop.summary_dirty` 事件、写幂等记录。
 3. **退款单的 `shift_id` / `operator_id` 记录退款动作发生时的班次与操作人，不继承原订单**——已支付订单常在另一班次、由另一人退款（ADR-0013）。`shift_id`/`operator_id` 只持 ID、不加外键。
-3. **不修改原单金额、不删除明细、不回退到 `open`**（DP-05）：已支付单据是审计事实。
-4. 更正错误单据 = 退款 + 新建一张正确单据，两张单都能在报表里追溯。
-5. 部分退款后仍可再次退款，直到累计额达到上限；每次都是独立幂等事务。
+4. **不修改原单金额、不删除明细、不回退到 `open`**（DP-05）：已支付单据是审计事实。实付 / 已退 / 可退均从记录派生，不落库（ADR-0014）。
+5. 部分退款后仍可再次退款，直到累计额达到上限；每次都是独立幂等事务，再次退完时 `partially_refunded → refunded`。
+6. 更正错误单据 = 退款 + 新建一张正确单据，两张单都能在报表里追溯。
 
 ## F-03 会员充值与跨店核销
 

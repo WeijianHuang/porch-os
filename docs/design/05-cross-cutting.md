@@ -93,7 +93,7 @@
 ```
 用例事务：业务写入 + idempotency_keys + outbox_events  → COMMIT
 worker：  批量领取未派发事件（FOR UPDATE SKIP LOCKED）
-          → 投递到订阅者 / 触发汇总重算 → 标记 published_at
+          → 投递到订阅者 / 触发汇总重算 → 标记 dispatched_at
           → 超过 attempts 上限 → 写 dead_letters 并告警
 ```
 

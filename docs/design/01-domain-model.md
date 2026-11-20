@@ -21,7 +21,7 @@
 | `member` | `Member` | `MemberBalance`、`BalanceLedger` | A 档案 + B 账 | 档案按手机号全局唯一；余额与流水按店独立 |
 | `order` | `Order` | `OrderLine`、`PriceAdjustment` | B | 单据与所有明细同属一个 `shop_id`；金额恒等于明细合计减调整 |
 | `order` | `Payment` | `PaymentEntry`（组合支付的一笔） | B | 「收款」是独立聚合根，按 `kind`（`sale` / `topup` / `other`）区分来源；`sale` 必挂订单、可多次尝试（`failed` 终态、重试新行留审计链）、组合支付逐渠道记录且合计等于收款额；`topup` 必挂会员且不挂订单（ADR-0013） |
-| `order` | `Refund` | — | B | 退款引用已成功的支付且不修改原单；累计退款不超过原支付；退款自带 `shift_id` / `operator_id`（退款动作的班次与操作人，不继承订单），常跨班次发生（ADR-0013） |
+| `order` | `Refund` | `RefundEntry`（退款的一笔渠道明细） | B | 退款引用已成功的支付且不修改原单；累计退款不超过原支付；退款自带 `shift_id` / `operator_id`（退款动作的班次与操作人，不继承订单），常跨班次发生；退款请求显式携带 `refund_entries`（渠道 + 金额），系统只校验渠道合法性与「单渠道累计退款 ≤ 该渠道原支付额」，不自动分摊、不决定超额处理（ADR-0013 / 0014） |
 | `order` | `Shift` | — | B | 一个门店同一时刻最多一个 `open` 班次（数据库部分唯一索引保证） |
 | `inventory` | `InventoryBalance` | `StockMovement`、`StockTransfer` | B | 余额 = 流水累计；不允许负库存（除非门店显式开启允许） |
 | `reporting` | `DailyShopSummary` | `ExportJob` | B / 派生 | 汇总可重算，重算结果与源流水一致 |
@@ -56,9 +56,19 @@
 | `status` | 状态机取值 | 见第 5 节 |
 | `shift_id` / `operator_id` | 班次 / 操作人 | 只持 ID |
 | `member_id` | 关联会员（可空） | 只持 ID，不嵌会员对象 |
-| `total_amount` / `paid_amount` / `discount_amount` | 金额（一律 CNY） | 定点十进制 `numeric(14,2)`；不带币种字段；`total = Σ(line) − Σ(adjustment)` |
+| `total_amount` / `discount_amount` | 应付快照金额（一律 CNY） | 定点十进制 `numeric(14,2)`；不带币种字段；**不可变**；`total = Σ(line) − Σ(adjustment)`。实付 / 已退 / 可退**不落库**，从不可变记录派生（见下，ADR-0014） |
 | `version` | 乐观锁版本 | 每次更新 `+1`，更新带 `WHERE version = $n` |
-| `created_at` / `updated_at` | 时间 | UTC `timestamptz`；展示按 `Asia/Shanghai`；业务日由 `created_at` 按统一口径推导 |
+| `created_at` / `updated_at` | 时间 | `timestamptz` 内部 UTC；连接 session 固定 UTC；展示按 `Asia/Shanghai`；业务日由 `created_at` 经统一 `business_date()`（UTC+8 + 门店切点）推导，不依赖 session 默认（ADR-0014） |
+
+**派生金额（不落库，ADR-0014）**：订单不再有 `paid_amount` 字段；下列三个量由用例层从不可变记录实时计算，真相以记录为准：
+
+| 派生量 | 计算口径 |
+|---|---|
+| 实付 `paid_amount` | `SUM(payments.amount)` where `order_id=? AND kind='sale' AND status='succeeded'` |
+| 已退 `refunded_amount` | `SUM(refunds.amount)` where `order_id=? AND status='succeeded'` |
+| 可退 `refundable_amount` | 实付 − 已退 |
+
+订单上的 `refunded` / `partially_refunded` 仅作粗粒度筛选标记，由退款事务更新；金额真相永远以记录聚合为准，二者不一致时以记录为准并视为缺陷。`payments` / `payment_entries` / `refunds` / `refund_entries` 一旦写入不可修改、不可删除，重试支付或再次退款都是新增行（ADR-0013 / 0014）。
 
 **`OrderLine`**：`order_id`、`catalog_item_id`（只持 ID）、`quantity`、`unit_price`、`amount`、`line_no`。明细不随目录价格变动而回溯改写——下单时快照价格。
 
@@ -70,11 +80,16 @@
 
 ```
 draft ──► open ──► pending_payment ──► paid ──► completed
+  │         │            │               │          │
+  │         │            │               ├──────────┤
+  │         │            │               ▼          ▼
+  │         │            │      partially_refunded / refunded
   │         │            │               │
-  │         │            │               └──► refunding ──► refunded
-  │         │            │                          └──► partially_refunded
+  │         │            │               └──► refunded（累计退完）
   └─────────┴────────────┴──────► cancelled
 ```
+
+**无 `refunding` 态**（ADR-0014）：退款在单个数据库事务内完成，事务外只能观测到 `succeeded` / `failed`，不存在稳定的「退款中」订单态；失败即整体回滚、订单状态不变，无需回退迁移。失败尝试以 `refunds.status='failed'` 留审计行。
 
 | 迁移 | 触发 | 允许的副作用 |
 |---|---|---|
@@ -82,7 +97,8 @@ draft ──► open ──► pending_payment ──► paid ──► complete
 | `open → pending_payment` | 提交结账 | 计价纯函数、生成应付 |
 | `pending_payment → paid` | 全部支付成功 | 写支付流水、扣库存、改汇总脏标记、发 `order.paid` |
 | `paid → completed` | 日结 | 封账并触发当日汇总重算（业务数据不归档，ADR-0004） |
-| `paid → refunding → refunded` | 发起退款 | 写退款单、回滚库存与余额 |
+| `paid` / `completed` / `partially_refunded` → `refunded`（全额）或 `partially_refunded`（部分） | 发起退款 | 单事务内写退款单与 `refund_entries`、校验渠道归属、回滚库存与余额；失败整体回滚、状态不变 |
+| `partially_refunded → refunded` | 后续退款把余额退完 | `CanTransition` 必须显式包含此边（ADR-0014） |
 | 任意未支付态 → `cancelled` | 取消 | 释放库存 |
 
 **不可变约定（DP-05）**：`paid` 及之后的状态**不允许回退到 `open`**。更正错误单据的方式是「对原单发起退款 + 新建一张正确单据」，而不是反结算改写原单。这样已支付单据始终是审计意义上的事实，报表与对账不需要处理「被改过的历史」。
@@ -92,7 +108,7 @@ draft ──► open ──► pending_payment ──► paid ──► complete
 | 聚合 | 状态流 | 备注 |
 |---|---|---|
 | `Payment` | `pending → succeeded / failed` | `failed` 是终态；重试生成新的支付尝试 |
-| `Refund` | `pending → succeeded / failed` | 累计退款额 ≤ 原支付额 |
+| `Refund` | `pending → succeeded / failed` | 累计退款额 ≤ 原支付额；`refund_entries` 各渠道累计 ≤ 该渠道原支付额（ADR-0014） |
 | `Shift` | `open → closing → closed` | 一个门店同时最多一个 `open`（部分唯一索引） |
 | `ExportJob` | `queued → running → succeeded / failed / expired` | `expired` 由定时任务清理 |
 
@@ -104,12 +120,13 @@ draft ──► open ──► pending_payment ──► paid ──► complete
 |---|---|---|
 | `Money` | `{amount decimal}`，币种为系统级常量 CNY | 禁止 `float64`；算术用定点十进制；`scale = 2`、`ROUND_HALF_UP`；**不带币种字段、不做币种校验与换算**（ADR-0004） |
 | `public_id` | 时间有序 UUID（PG 18 内置 `uuidv7()`） | 对外暴露、可安全排序；降级到 PG 17 时由应用层生成（ADR-0002 联动条款） |
-| `order_no` | 人类可读单号 | **店内唯一**，日期部分按 UTC+8；序号由数据库序列保证，不靠应用层拼接日期与门店 ID |
+| `order_no` | 人类可读单号 | **店内唯一**，日期部分取 `business_date(now(), shop_id)`（UTC+8 + 门店营业日切点，ADR-0014），与日报 / 班次 / 汇总同口径；序号由数据库序列保证，不靠应用层拼接日期与门店 ID；`INSERT` 时显式调用 `next_order_no(shop_id)`，无字面 DEFAULT |
 | `IdempotencyKey` | `{scope, key, request_hash}` | `scope` 含主体与门店；相同 key + 不同 hash → 冲突错误，不静默复用结果 |
 | `ShopScope` | 当前主体可见的门店 ID 集合 | 由认证主体 + `user_shops` 推导（一个用户可有 N 家店、一店也可有多个用户），客户端传参只能做「集合内选择」，不能扩大集合；**是请求期推导结果，不对应任何持久化分组对象**（ADR-0005） |
 | `CurrentShop` | 本次请求正在操作的单个 `shop_id` | 客户端经 `X-Shop-Id` **显式给出**，服务端与 `ShopScope` 求交后注入 context；是请求期上下文，**不落库、不进 JWT、不是持久化实体、不是授权来源**（ADR-0006） |
 | `TimeRange` | 半开区间 `[start, end)` | 统一 UTC，避免 `BETWEEN` 的边界重复计数 |
-| `BusinessDay` | `(occurred_at AT TIME ZONE 'Asia/Shanghai')::date` 再按门店营业日切点偏移 | 全系统唯一口径；日报、班次、汇总、导出共用；基准时区固定 UTC+8，不接受客户端或门店时区参数（ADR-0004） |
+| `BusinessDay` / `business_date(p_at, p_shop_id)` | 统一业务日函数：`(p_at AT TIME ZONE 'Asia/Shanghai')::date` 再按门店 `shop_settings` 营业日切点偏移 | 全系统唯一口径；日报、班次、汇总、导出、**单号日期**共用；基准时区固定 UTC+8，不接受客户端或门店时区参数（ADR-0004）；只可配切点偏移，不可覆盖基准时区（ADR-0014） |
+| 连接 session 时区 | 所有连接初始化执行 `SET TIME ZONE 'UTC'` | 时间列均为 `timestamptz`（内部 UTC）；业务日显式 `AT TIME ZONE`，不依赖 session 默认；不采用无时区 `timestamp`（ADR-0014） |
 
 > 金额与时间的口径收窄后，领域层不再需要任何汇率、时区表或换算函数；`internal/domain/` 保持零外部依赖。
 
@@ -145,14 +162,14 @@ Porch OS 只提供**通用多店经营底座**，不内置任何行业专属规�
 1. 每条 B 类记录有且只有一个 `shop_id`，且与聚合根一致。
 2. 单据金额恒等于「明细合计 − 调整合计」，且调整已分摊到行。
 3. 已支付单据不可回退到未支付状态；更正走退款 + 新单。
-4. 累计退款不超过原支付额；组合支付各笔之和等于收款额。
+4. 累计退款不超过原支付额；组合支付各笔之和等于收款额；退款渠道明细之和等于退款额，且单渠道累计退款不超该渠道原支付额（ADR-0014）。
 5. 库存余额等于流水累计；扣减不允许把余额写成负数（除非门店显式允许）。
 6. 状态迁移只能通过 `CanTransition` 纯函数，且与写入同事务。
 7. 全局实体（会员档案、目录项）不带 `shop_id`，其副作用数据一律带。
 8. 领域层不 import 适配器、平台包，也不直接执行 SQL。
 9. 金额路径不出现浮点类型；单币种 CNY 下不出现 `currency` 字段、汇率或币种一致性校验（OQ-01 已由 ADR-0004 关闭）。
 10. 任何跨店动作都显式声明，且发生在当前主体可见门店集合之内；不存在门店组 / 分组对象，也不按组授权（ADR-0005）。
-11. 业务日与单号日期一律按 UTC+8 推导；`AT TIME ZONE` 必须显式写 `'Asia/Shanghai'`，不依赖会话默认时区。
+11. 业务日与单号日期一律由统一 `business_date()`（UTC+8 + 门店营业日切点）推导，二者同口径；`AT TIME ZONE` 必须显式写 `'Asia/Shanghai'`，不依赖会话默认；连接 session 固定 UTC，时间列保持 `timestamptz`（ADR-0014）。
 12. 所有写操作在线同步完成；不存在本地队列、离线单据或补传合并路径（ADR-0004）。
 13. 一个用户可关联多间门店（`user_shops` 多对多），但当前门店必须显式携带且只是请求期上下文：不落库、不进 JWT、不作为授权来源；不设 `users.shop_id` / `shops.owner_user_id` / 切换端点（ADR-0006）。
 

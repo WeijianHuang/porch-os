@@ -13,8 +13,8 @@
 | 主键 | `bigint GENERATED ALWAYS AS IDENTITY` | 内部主键不外露，便于迁移与重编号；暂不归档，无需预留归档主键段 |
 | 对外标识 | `public_id uuid NOT NULL DEFAULT uuidv7()`，单独唯一约束 | 时间有序、可安全按创建顺序排序；PG 17 降级时改应用层生成 |
 | 金额 | `numeric(14,2)`；数量 `numeric(14,3)` | 禁止 `float` / `double precision`；**单一币种 CNY，不设 `currency` 列、不存汇率**（ADR-0004） |
-| 时间 | `timestamptz`，UTC 存储；区间一律半开 `[start, end)` | 避免 `BETWEEN` 边界重复计数 |
-| 业务日 | `(occurred_at AT TIME ZONE 'Asia/Shanghai')::date` + 门店营业日切点偏移 | 全系统固定 UTC+8，**不设门店级 `timezone` 列**、不接受客户端时区参数（ADR-0004）；日报、班次、单号日期、导出共用 |
+| 时间 | `timestamptz`，UTC 存储；所有连接初始化执行 `SET TIME ZONE 'UTC'`；区间一律半开 `[start, end)` | 类型层面保留时区语义，内部按 UTC 存储；展示与业务日显式转换、不依赖 session 默认；不采用无时区 `timestamp`（ADR-0014） |
+| 业务日 | `(p_at AT TIME ZONE 'Asia/Shanghai')::date` + 门店营业日切点偏移，统一封装为 `business_date(p_at, p_shop_id)` 函数 | 全系统固定 UTC+8，**不设门店级 `timezone` 列**、不接受客户端时区参数（ADR-0004）；日报、班次、单号日期、导出共用；门店只可配切点偏移，不可覆盖基准时区（ADR-0014） |
 | 保留 | 业务数据在线全量保留 | 暂不归档、不设保留窗口、不分区；详见第 7 节 |
 | 枚举 | `text + CHECK`，不建 PG `ENUM` 类型 | 取值变更走迁移，不需要 `ALTER TYPE` |
 | JSON | `jsonb + 默认 '{}'`，只放非查询维度属性 | 需要检索的字段必须独立成列 |
@@ -61,7 +61,8 @@
 | order | `price_adjustments` | B | 整单折扣/抹零（已分摊到行） | `(shop_id, order_id, seq)` |
 | order | `payments` | B | 收款（`kind` = `sale` / `topup` / `other`；`sale` 挂订单、`topup` 挂会员） | `(shop_id, idempotency_key)`；`sale` 另受 `(shop_id, order_id)` 外键 |
 | order | `payment_entries` | B | 组合支付的一笔（逐渠道） | `(shop_id, payment_id, seq)` |
-| order | `refunds` | B | 退款单（自带退款班次 / 操作人） | `(shop_id, refund_no)` |
+| order | `refunds` | B | 退款单（自带退款班次 / 操作人，无 `refunding` 中间态） | `(shop_id, refund_no)` |
+| order | `refund_entries` | B | 退款逐渠道明细（请求显式携带，系统只校验不自动分摊，ADR-0014） | `(shop_id, refund_id, seq)` |
 | inventory | `inventory_balances` | B | 按店库存 | `(shop_id, catalog_item_id)` |
 | inventory | `stock_movements` | B | 出入库流水（只追加） | `(shop_id, public_id)` |
 | inventory | `stock_transfers` | B | 跨店调拨单（显式动作） | `(shop_id, transfer_no)` |
@@ -139,25 +140,29 @@ CREATE TABLE user_shops (
 );
 CREATE INDEX idx_user_shops_shop ON user_shops (shop_id, user_id);
 
--- 单号由数据库序列生成，杜绝应用层拼接导致并发重复
+-- 业务日与单号统一函数（ADR-0014）：基准 UTC+8 + 门店 shop_settings 营业日切点偏移；
+-- 不依赖 session 时区（连接初始化已 SET TIME ZONE 'UTC'），不接受门店覆盖基准时区（ADR-0004）。
+-- 详情见文末「业务日与单号函数」小节；此处给出签名，供 orders.order_no 显式调用。
+-- CREATE FUNCTION business_date(p_at timestamptz, p_shop_id bigint) RETURNS date ...;
+-- CREATE FUNCTION next_order_no(p_shop_id bigint) RETURNS text ...;
+-- 单号由数据库序列生成序号，杜绝应用层拼接导致并发重复
 CREATE SEQUENCE order_no_seq AS bigint;
 
 CREATE TABLE orders (
   id               bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   shop_id          bigint      NOT NULL REFERENCES shops(id),
   public_id        uuid        NOT NULL DEFAULT uuidv7(),
-  -- 单号日期按 UTC+8，与业务日口径一致；不依赖数据库会话时区
-  order_no         text        NOT NULL DEFAULT
-                     ('SO' || to_char(now() AT TIME ZONE 'Asia/Shanghai', 'YYYYMMDD') || '-' ||
-                      lpad(nextval('order_no_seq')::text, 10, '0')),
+  -- 单号日期取 business_date（UTC+8 + 门店切点），与日报 / 班次 / 汇总同口径（ADR-0014）；
+  -- 无字面 DEFAULT，INSERT 时必须显式调用 next_order_no(shop_id)
+  order_no         text        NOT NULL,
   status           text        NOT NULL DEFAULT 'draft',
   member_id        bigint      REFERENCES members(id),
   shift_id         bigint,
   operator_id      bigint      NOT NULL,
   -- 单一币种 CNY（ADR-0004）：金额列不带 currency，不做币种校验与换算
+  -- 应付快照不可变：total = Σ(line) − Σ(adjustment)；实付 / 已退 / 可退从记录派生，不落库（ADR-0014）
   total_amount     numeric(14,2) NOT NULL DEFAULT 0,
   discount_amount  numeric(14,2) NOT NULL DEFAULT 0,
-  paid_amount      numeric(14,2) NOT NULL DEFAULT 0,
   version          integer     NOT NULL DEFAULT 0,
   deleted_at       timestamptz,
   created_at       timestamptz NOT NULL DEFAULT now(),
@@ -167,9 +172,8 @@ CREATE TABLE orders (
   CONSTRAINT uq_orders_shop_id_id UNIQUE (shop_id, id),             -- 供复合外键引用
   CONSTRAINT ck_orders_status     CHECK (status IN
               ('draft','open','pending_payment','paid','completed',
-               'cancelled','refunding','refunded','partially_refunded')),
-  CONSTRAINT ck_orders_amounts    CHECK (total_amount >= 0 AND paid_amount >= 0
-                                         AND discount_amount >= 0)
+               'cancelled','refunded','partially_refunded')),       -- 无 refunding（ADR-0014）
+  CONSTRAINT ck_orders_amounts    CHECK (total_amount >= 0 AND discount_amount >= 0)
 );
 CREATE INDEX idx_orders_shop_created ON orders (shop_id, created_at DESC)
   WHERE deleted_at IS NULL;
@@ -287,6 +291,24 @@ CREATE INDEX idx_refunds_shop_shift    ON refunds (shop_id, shift_id, created_at
 CREATE INDEX idx_refunds_shop_operator ON refunds (shop_id, operator_id, created_at DESC);
 CREATE INDEX idx_refunds_shop_payment  ON refunds (shop_id, payment_id);
 
+-- 退款逐渠道明细（ADR-0014）：请求显式携带，系统只校验不自动分摊。
+-- SUM(refund_entries.amount) 必须等于 refunds.amount；单渠道累计退款 ≤ 该渠道原支付额。
+CREATE TABLE refund_entries (
+  id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  shop_id     bigint        NOT NULL,
+  refund_id   bigint        NOT NULL,
+  seq         integer       NOT NULL,
+  method      text          NOT NULL,
+  amount      numeric(14,2) NOT NULL,
+  created_at  timestamptz   NOT NULL DEFAULT now(),
+  CONSTRAINT uq_refund_entries_shop_refund_seq UNIQUE (shop_id, refund_id, seq),
+  CONSTRAINT fk_refund_entries_refund FOREIGN KEY (shop_id, refund_id)
+              REFERENCES refunds (shop_id, id),
+  CONSTRAINT ck_refund_entries_method CHECK (method IN ('cash','card','balance','coupon')),
+  CONSTRAINT ck_refund_entries_amount CHECK (amount > 0)
+);
+CREATE INDEX idx_refund_entries_shop_refund ON refund_entries (shop_id, refund_id);
+
 CREATE TABLE shifts (
   id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   shop_id     bigint      NOT NULL REFERENCES shops(id),
@@ -299,32 +321,34 @@ CREATE TABLE shifts (
 -- 部分唯一索引：一家店同时最多只有一个 open 班次
 CREATE UNIQUE INDEX uq_shifts_one_open_per_shop ON shifts (shop_id) WHERE status = 'open';
 
+-- 平台表示例 DDL 与已落地的 migrations/00001 严格对齐（ADR-0014）；改示例、不改迁移。
 CREATE TABLE idempotency_keys (
-  scope          text        NOT NULL,
-  key            text        NOT NULL,
-  request_hash   bytea       NOT NULL,
-  status         text        NOT NULL DEFAULT 'in_progress',
-  response_code  integer,
-  response_body  jsonb,
-  created_at     timestamptz NOT NULL DEFAULT now(),
-  expires_at     timestamptz NOT NULL,
-  PRIMARY KEY (scope, key)
+  scope           text        NOT NULL,
+  key             text        NOT NULL,
+  request_hash    bytea       NOT NULL,
+  state           text        NOT NULL DEFAULT 'in_progress',
+  response_status integer,
+  response_body   jsonb,
+  expires_at      timestamptz NOT NULL DEFAULT (now() + interval '24 hours'),
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  completed_at    timestamptz,
+  PRIMARY KEY (scope, key),
+  CONSTRAINT ck_idem_state CHECK (state IN ('in_progress','succeeded','failed'))
 );
-CREATE INDEX idx_idem_expiry ON idempotency_keys (expires_at);
+CREATE INDEX idx_idem_expiry ON idempotency_keys (expires_at) WHERE state <> 'succeeded';
 
 CREATE TABLE outbox_events (
   id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  shop_id        bigint      NOT NULL,
-  event_type     text        NOT NULL,
+  shop_id        bigint,
   aggregate_type text        NOT NULL,
-  aggregate_id   bigint      NOT NULL,
+  aggregate_id   text        NOT NULL,
+  event_type     text        NOT NULL,
   payload        jsonb       NOT NULL DEFAULT '{}'::jsonb,
-  occurred_at    timestamptz NOT NULL DEFAULT now(),
-  published_at   timestamptz,
-  attempts       integer     NOT NULL DEFAULT 0
+  attempts       integer     NOT NULL DEFAULT 0,
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  dispatched_at  timestamptz
 );
-CREATE INDEX idx_outbox_unpublished ON outbox_events (occurred_at, id)
-  WHERE published_at IS NULL;
+CREATE INDEX idx_outbox_pending ON outbox_events (created_at) WHERE dispatched_at IS NULL;
 
 CREATE TABLE daily_shop_summary (
   shop_id        bigint      NOT NULL REFERENCES shops(id),
@@ -342,7 +366,33 @@ CREATE TABLE daily_shop_summary (
 -- 按依赖逆序 DROP；此处省略，真实迁移文件必须完整给出
 ```
 
-**为什么单号这样设计**：单号由数据库序列生成 + `(shop_id, order_no)` 唯一约束双保险。任何「应用层用日期 + 门店 ID + 计数器拼字符串」的做法，在并发下都会重复，且没有数据库兜底；这类缺陷一旦产生脏数据，事后补唯一约束会失败。日期部分显式写 `AT TIME ZONE 'Asia/Shanghai'`，与业务日一致，也不随部署环境的会话时区漂移。
+**为什么单号这样设计**（ADR-0014）：单号由数据库序列提供序号 + `(shop_id, order_no)` 唯一约束双保险，杜绝「应用层用日期 + 门店 ID + 计数器拼字符串」在并发下重复且无数据库兜底的问题。日期部分改由 `business_date(now(), shop_id)` 提供，与日报 / 班次 / 汇总同口径——门店设早 6 点营业日切点时，凌晨 3 点的单子单号日期归前一天，与 business_date 一致；`order_no` 无字面 DEFAULT，`INSERT` 时必须显式调用 `next_order_no(shop_id)`，遗漏将触发 `NOT NULL` 约束错误（宁可显式失败，不可口径分裂）。
+
+**业务日与单号函数**（PG 18.7 语法示意，供订单域首批迁移落地）：
+
+```sql
+-- 业务日：基准 UTC+8 + 门店 shop_settings 的营业日切点偏移（默认 00:00，可为负数表示前移）。
+-- 只可配切点偏移，不接受门店覆盖基准时区（ADR-0004）；不依赖 session 时区。
+CREATE FUNCTION business_date(p_at timestamptz, p_shop_id bigint) RETURNS date
+LANGUAGE sql STABLE AS $$
+  SELECT ((p_at AT TIME ZONE 'Asia/Shanghai')
+          - COALESCE(
+              (SELECT (value->>'cutoff_minutes')::integer
+               FROM shop_settings
+               WHERE shop_id = p_shop_id AND key = 'business_day'), 0) * interval '1 minute'
+         )::date;
+$$;
+
+-- 单号：日期部分取 business_date，序号由 order_no_seq 提供（并发唯一）。
+-- INSERT orders 时显式调用；号段唯一性仍由序列保证，切点只影响日期部分。
+CREATE FUNCTION next_order_no(p_shop_id bigint) RETURNS text
+LANGUAGE sql AS $$
+  SELECT 'SO' || to_char(business_date(now(), p_shop_id), 'YYYYMMDD') || '-'
+         || lpad(nextval('order_no_seq')::text, 10, '0');
+$$;
+```
+
+> 连接初始化统一 `SET TIME ZONE 'UTC'`；所有时间列保持 `timestamptz`，面向业务日的计算一律显式 `AT TIME ZONE 'Asia/Shanghai'`，前端拿到 UTC 时间按展示地时区渲染（ADR-0014）。
 
 ## 4. 用数据库约束兜住隔离
 
@@ -366,7 +416,7 @@ CREATE TABLE daily_shop_summary (
 | 日报 / 经营分析 | `daily_shop_summary (shop_id, business_date)` 主键；明细回查 `(shop_id, created_at)` | 报表先走汇总表，不走大表实时扫；`business_date` 按 UTC+8 口径，跨营业日切点的记录归入同一天 |
 | 会员余额流水 | `(shop_id, member_id, created_at DESC)` | 按店账，不跨店混算 |
 | 库存流水 | `(shop_id, catalog_item_id, created_at DESC)` | 同上 |
-| 待派发事件 | `outbox_events (occurred_at, id) WHERE published_at IS NULL` | 部分索引，随投递完成自动缩小 |
+| 待派发事件 | `outbox_events (created_at) WHERE dispatched_at IS NULL` | 部分索引，随投递完成自动缩小 |
 | 幂等清理 | `idempotency_keys (expires_at)` | 定期清理过期键 |
 | 审计清理 | `audit_logs (created_at)` | 定时按批删除超期记录（默认 30 天，ADR-0007）；截止点按 UTC+8 自然日计算，配合表膨胀 / `VACUUM` 监控，口径见 [08](08-audit-retention.md) §2 |
 
@@ -398,7 +448,7 @@ CREATE TABLE daily_shop_summary (
 | 迁移测试 | 在真实 PG 18.7 容器里跑 `up` → `down` → `up`，断言无残留对象 |
 | 约束测试 | 并发插入相同单号断言唯一约束生效；插入跨店明细断言复合外键拒绝；断言 schema 中不存在 `shop_group*` 表 / 列，`shops` 无分组或层级列（ADR-0005）；断言 `users` / `shops` 无 `shop_id` / `current_shop_id` / `owner_user_id` 列、不存在 `current_shop` 或偏好表，且 `user_shops` 支持「一人多店 / 一店多人」双向查询（ADR-0006） |
 | 精度测试 | 大额与分摊场景断言 `numeric` 无舍入漂移；断言金额列不存在 `currency` 字段与浮点类型 |
-| 业务日测试 | 在 UTC+8 日界（UTC 16:00）前后各插入一条，断言归入正确的 `business_date`，且单号日期与之一致 |
+| 业务日测试 | 在 UTC+8 日界（UTC 16:00）前后各插入一条，断言归入正确的 `business_date`，且单号日期与之一致（现在单号走同一 `business_date()`，含门店切点，ADR-0014）；另测门店设切点后跨切点单号日期与日报口径一致 |
 | 隔离测试 | 用两个门店、两个用户交叉请求，断言任一响应不含对方门店数据 |
 | 计划测试 | 关键查询 `EXPLAIN` 存档，断言不出现大表 `Seq Scan` |
 | 保留测试 | 插入跨越 30 天日界（UTC+8）的审计记录，断言清理任务只删超期行、不触碰任何业务单据与流水，且业务请求无法更新 / 删除审计记录；`audit_log_cleanup_runs` 留下成功痕迹、双 worker 副本不重复执行（ADR-0007 / 0008，见 [08](08-audit-retention.md) §6） |
