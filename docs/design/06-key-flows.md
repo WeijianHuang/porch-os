@@ -100,7 +100,8 @@ paid / completed ──► refunded（全额）
 无 `refunding` 态：退款在单个事务内完成，事务外只观测 `succeeded` / `failed`；失败整体回滚、订单状态不变（ADR-0014）。
 
 1. 校验：原单处于 `paid` / `completed` / `partially_refunded`；原支付 `payments.status = 'succeeded'`；请求体显式携带 `refund_entries`（`method` + `amount`），断言 `Σ refund_entries.amount = amount`、每个 `method` 都在原支付 `payment_entries` 中出现。
-2. 事务：对同一 `payment_id` 加锁 → 汇总既有 `succeeded` 退款额并校验累计 ≤ 原支付额 → 对涉及的每个 `(payment_id, method)` 加锁、汇总该渠道累计退款并校验 ≤ 该渠道原支付额（超限 → `409`，由前端 / 客户协商，**不自动改派或按比例分摊**）→ `INSERT refunds(payment_id, order_id, shift_id, operator_id, amount, reason)` 与 `INSERT refund_entries` → `UPDATE orders` 状态与 `version`、按原 `payment_entries` 反向回滚会员余额与库存、写反向流水、写 `refund.succeeded` 与 `shop.summary_dirty` 事件、写幂等记录。
+2. 事务：对同一 `payment_id` 加锁 → 汇总既有 `succeeded` 退款额并校验累计 ≤ 原支付额 → 对涉及的每个 `(payment_id, method)` 加锁、汇总该渠道累计退款并校验 ≤ 该渠道原支付额（超限 → `409`，由前端 / 客户协商，**不自动改派或按比例分摊**）→ `INSERT refunds(kind='sale', payment_id, order_id, shift_id, operator_id, amount, reason)` 与 `INSERT refund_entries` → `UPDATE orders` 状态与 `version`、按原 `payment_entries` 反向回滚会员余额与库存、写反向流水、写 `refund.succeeded` 与 `shop.summary_dirty` 事件、写幂等记录。
+2a. **只退实际支付部分**：券优惠已在下单时进 `price_adjustments`、不进 `payment_entries`，可退额天然不含券（ADR-0016）；`refund_entries.method` 不含 `coupon`。**禁止跨店退款**：退款单 `shop_id` 强绑原支付与本店账，A 店单据不能在 B 店退。
 3. **退款单的 `shift_id` / `operator_id` 记录退款动作发生时的班次与操作人，不继承原订单**——已支付订单常在另一班次、由另一人退款（ADR-0013）。`shift_id`/`operator_id` 只持 ID、不加外键。
 4. **不修改原单金额、不删除明细、不回退到 `open`**（DP-05）：已支付单据是审计事实。实付 / 已退 / 可退均从记录派生，不落库（ADR-0014）。
 5. 部分退款后仍可再次退款，直到累计额达到上限；每次都是独立幂等事务，再次退完时 `partially_refunded → refunded`。
@@ -111,6 +112,7 @@ paid / completed ──► refunded（全额）
 | 流程 | 步骤 | 关键点 |
 |---|---|---|
 | 充值 | 事务：`member_balances(shop_id, member_id)` 条件 upsert → 写 `balance_ledger` → 写 `payments(kind='topup', order_id=NULL, member_id=<id>, shift_id, operator_id)` → 事件 + 幂等 | 会员档案全局唯一，**余额按店独立**；充值**不挂订单**，由 `ck_payments_kind_ref` 约束（ADR-0013） |
+| 充值退款（ADR-0016） | 前置校验原收款 `kind='topup' AND succeeded` 且属本店 `member_id` → 同事务：对 `payment_id` 加锁并校验累计退款 ≤ 原充值额 → 校验 `refund_entries` 渠道（`Σ`=退款额、单渠道累计 ≤ 原入账额、不含券）→ `INSERT refunds(kind='topup', payment_id, member_id, order_id=NULL, shift_id, operator_id, amount, reason)` + `refund_entries` → 条件扣回 `member_balances(balance ≥ 退款额)` → 写反向 `balance_ledger(ref_type='refund')` → 事件 + 幂等 | **余额不足 → `409 INSUFFICIENT_BALANCE` 整笔拒绝，不做部分退、不写负余额**；只退实际支付部分；**禁止跨店**（本店支付 / 本店余额）；权限 `member.topup.write`；失败整笔回滚 |
 | 本店消费 | 与 F-01 阶段 D 的 e/h 相同 | 只在当前 `shop_id` 记账 |
 | 跨店核销 | 显式动作：校验两家店都在主体可见集合内 + 单独权限 → 一个事务里在 A 店写一条出账流水、B 店写一条入账流水，用同一个 `transfer_ref` 关联 → 事件 + 幂等 | 不修改会员档案归属、不提权；**不做自动清分**（OQ-07 已由 ADR-0007 关闭），差额只在按店分组的报表呈现，不生成往来账 / 结算单 |
 

@@ -20,8 +20,8 @@
 | `catalog` | `CatalogItem` | `Category`、`ShopCatalogOverride` | A 全局 + B 覆盖 | 目录全局唯一；价格/上下架按店覆盖，覆盖记录带 `shop_id` |
 | `member` | `Member` | `MemberBalance`、`BalanceLedger` | A 档案 + B 账 | 档案按手机号全局唯一；余额与流水按店独立 |
 | `order` | `Order` | `OrderLine`、`PriceAdjustment` | B | 单据与所有明细同属一个 `shop_id`；金额恒等于明细合计减调整 |
-| `order` | `Payment` | `PaymentEntry`（组合支付的一笔） | B | 「收款」是独立聚合根，按 `kind`（`sale` / `topup` / `other`）区分来源；`sale` 必挂订单、可多次尝试（`failed` 终态、重试新行留审计链）、组合支付逐渠道记录且合计等于收款额；`topup` 必挂会员且不挂订单（ADR-0013） |
-| `order` | `Refund` | `RefundEntry`（退款的一笔渠道明细） | B | 退款引用已成功的支付且不修改原单；累计退款不超过原支付；退款自带 `shift_id` / `operator_id`（退款动作的班次与操作人，不继承订单），常跨班次发生；退款请求显式携带 `refund_entries`（渠道 + 金额），系统只校验渠道合法性与「单渠道累计退款 ≤ 该渠道原支付额」，不自动分摊、不决定超额处理（ADR-0013 / 0014） |
+| `order` | `Payment` | `PaymentEntry`（组合支付的一笔） | B | 「收款」是独立聚合根，按 `kind`（`sale` / `topup` / `other`）区分来源；`sale` 必挂订单、可多次尝试（`failed` 终态、重试新行留审计链）、组合支付逐渠道记录且合计等于收款额；`topup` 必挂会员且不挂订单（ADR-0013）；`method` 只记**真实资金渠道**（`cash` / `balance` / `card`），券不是支付、一律进 `price_adjustments`（ADR-0016） |
+| `order` | `Refund` | `RefundEntry`（退款的一笔渠道明细） | B | 退款以 `kind`（`sale` / `topup`）区分来源、必等于原收款的 `kind`；`sale` 挂订单、`topup` 挂会员（`member_id`）；引用已成功的支付且不修改原单，累计退款 ≤ 原支付；退款自带 `shift_id` / `operator_id`（退款动作的班次与操作人，不继承订单），常跨班次发生；退款请求显式携带 `refund_entries`（渠道 + 金额）且只退实际支付部分，系统只校验渠道合法性与「单渠道累计退款 ≤ 该渠道原支付额」，不自动分摊、不决定超额处理；**禁止跨店退款、充值余额不足整笔拒绝**（ADR-0013 / 0014 / 0016） |
 | `order` | `Shift` | — | B | 一个门店同一时刻最多一个 `open` 班次（数据库部分唯一索引保证） |
 | `inventory` | `InventoryBalance` | `StockMovement`、`StockTransfer` | B | 余额 = 流水累计；不允许负库存（除非门店显式开启允许） |
 | `reporting` | `DailyShopSummary` | `ExportJob` | B / 派生 | 汇总可重算，重算结果与源流水一致 |
@@ -65,14 +65,18 @@
 | 派生量 | 计算口径 |
 |---|---|
 | 实付 `paid_amount` | `SUM(payments.amount)` where `order_id=? AND kind='sale' AND status='succeeded'` |
-| 已退 `refunded_amount` | `SUM(refunds.amount)` where `order_id=? AND status='succeeded'` |
-| 可退 `refundable_amount` | 实付 − 已退 |
+| 已退 `refunded_amount` | `SUM(refunds.amount)` where `order_id=? AND kind='sale' AND status='succeeded'`（显式过滤 `kind`，topup 退款不计入订单已退，ADR-0016） |
+| 可退 `refundable_amount` | 实付 − 已退（只含实际支付部分，券优惠不在其中） |
 
 订单上的 `refunded` / `partially_refunded` 仅作粗粒度筛选标记，由退款事务更新；金额真相永远以记录聚合为准，二者不一致时以记录为准并视为缺陷。`payments` / `payment_entries` / `refunds` / `refund_entries` 一旦写入不可修改、不可删除，重试支付或再次退款都是新增行（ADR-0013 / 0014）。
 
+**充值可退额（不落库，ADR-0016）**：充值退款以 `kind='topup'`、`member_id` 锚定，按原 `payment_id` 计算；可退额 = 原 `payments.amount`（`kind='topup'`、`succeeded`）− `SUM(refunds.amount)`（`payment_id=? AND kind='topup' AND succeeded`）。退款只涉及**实际支付部分**；余额不足（`member_balances.balance < 退款额`）时**整笔拒绝**（`409 INSUFFICIENT_BALANCE`），不做部分退、不写负余额；**禁止跨店退款**（退款单 `shop_id` 强绑原支付与会员本店账）。
+
 **`OrderLine`**：`order_id`、`catalog_item_id`（只持 ID）、`quantity`、`unit_price`、`amount`、`line_no`。明细不随目录价格变动而回溯改写——下单时快照价格。
 
-**`Payment` / `PaymentEntry`**：一次收款可组合多种方式（现金、卡、余额、券），每个 `PaymentEntry` 记方式与金额，合计等于本次收款额。禁止把「组合支付」压成一个字符串字段。`Payment` 以 `kind` 区分来源：`sale`（销售收款，`order_id` 必填，可多次尝试，失败终态、重试生成新行）、`topup`（会员充值，`order_id` 为空、`member_id` 必填）、`other`（其他收款，本期不开放端点）；三者由数据库 CHECK 约束钉死，不允许「有订单却是充值」的脏数据（ADR-0013）。`payments` 与 `refunds` 均带 `shift_id` / `operator_id`，记录**动作发生时**的班次与操作人（只持 ID、不建外键导航）；退款的归属不继承原订单，因为退款常发生在另一班次、由另一人操作。
+**`Payment` / `PaymentEntry`**：一次收款可组合多种方式（现金、卡、余额），每个 `PaymentEntry` 记方式与金额，合计等于本次收款额。禁止把「组合支付」压成一个字符串字段。`method` 只记**真实资金渠道**（`cash` / `balance` / `card`）：**券不是支付，它减少应收、不发生资金转移，一律进 `price_adjustments`（按明细分摊），不得进 `payment_entries`**（ADR-0016）；本期无卡券实体 / 发放 / 核销规划，`card` 保留枚举位但本期接入以 API 白名单为准。`Payment` 以 `kind` 区分来源：`sale`（销售收款，`order_id` 必填，可多次尝试，失败终态、重试生成新行）、`topup`（会员充值，`order_id` 为空、`member_id` 必填）、`other`（其他收款，本期不开放端点）；三者由数据库 CHECK 约束钉死，不允许「有订单却是充值」的脏数据（ADR-0013）。`payments` 与 `refunds` 均带 `shift_id` / `operator_id`，记录**动作发生时**的班次与操作人（只持 ID、不建外键导航）；退款的归属不继承原订单，因为退款常发生在另一班次、由另一人操作。
+
+**`Refund` / `RefundEntry`**（ADR-0016）：退款以 `kind`（`sale` / `topup`）区分来源，必等于原收款 `payments.kind`；`sale` 挂订单、`topup` 挂会员（`member_id`），`order_id` 可空。退款只退实际支付部分，`refund_entries.method` 同 `payment_entries` 口径（不含券）；充值退款的余额扣回与本店账强绑，**禁止跨店**。
 
 ## 5. 状态机
 
@@ -108,7 +112,7 @@ draft ──► open ──► pending_payment ──► paid ──► complete
 | 聚合 | 状态流 | 备注 |
 |---|---|---|
 | `Payment` | `pending → succeeded / failed` | `failed` 是终态；重试生成新的支付尝试 |
-| `Refund` | `pending → succeeded / failed` | 累计退款额 ≤ 原支付额；`refund_entries` 各渠道累计 ≤ 该渠道原支付额（ADR-0014） |
+| `Refund` | `pending → succeeded / failed` | 累计退款额 ≤ 原支付额；`refund_entries` 各渠道累计 ≤ 该渠道原支付额；`kind='topup'` 另要求本店余额充足，否则整笔拒绝（ADR-0014 / 0016） |
 | `Shift` | `open → closing → closed` | 一个门店同时最多一个 `open`（部分唯一索引） |
 | `ExportJob` | `queued → running → succeeded / failed / expired` | `expired` 由定时任务清理 |
 
@@ -162,7 +166,9 @@ Porch OS 只提供**通用多店经营底座**，不内置任何行业专属规�
 1. 每条 B 类记录有且只有一个 `shop_id`，且与聚合根一致。
 2. 单据金额恒等于「明细合计 − 调整合计」，且调整已分摊到行。
 3. 已支付单据不可回退到未支付状态；更正走退款 + 新单。
-4. 累计退款不超过原支付额；组合支付各笔之和等于收款额；退款渠道明细之和等于退款额，且单渠道累计退款不超该渠道原支付额（ADR-0014）。
+4. 累计退款不超过原支付额；组合支付各笔之和等于收款额；退款渠道明细之和等于退款额，且单渠道累计退款不超该渠道原支付额（ADR-0014）；退款只退实际支付部分，券优惠不得进支付 / 退款渠道（ADR-0016）。
+4a. 退款以 `kind` 区分来源且等于原收款：sale 挂订单、topup 挂会员；充值退款要求本店余额 ≥ 退款额，不足整笔拒绝（不做部分退、不写负余额，ADR-0016）。
+4b. 禁止跨店退款：退款单 `shop_id` 强绑原支付与会员本店账（ADR-0016 / 0003）。
 5. 库存余额等于流水累计；扣减不允许把余额写成负数（除非门店显式允许）。
 6. 状态迁移只能通过 `CanTransition` 纯函数，且与写入同事务。
 7. 全局实体（会员档案、目录项）不带 `shop_id`，其副作用数据一律带。

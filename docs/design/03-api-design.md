@@ -203,17 +203,18 @@
 | scheduling | `POST /api/v1/shops/{shopId}/scheduling/events/{eventId}/{action}` | `restore` 回原位 / `cancel` 取消 / `complete` 完成 / `assignment-method` 指派方式变更 |
 | order | `POST /api/v1/shops/{shopId}/orders` | 开单（`draft`） |
 | order | `GET /api/v1/shops/{shopId}/orders` | 单据列表（keyset 分页） |
-| order | `GET /api/v1/shops/{shopId}/orders/{id}` | 单据详情（含明细）；金额响应含不可变 `total_amount` / `discount_amount` 与**派生** `paid_amount` / `refunded_amount` / `refundable_amount`（从 `payments` / `refunds` 的 succeeded 行聚合，不落库，ADR-0014） |
+| order | `GET /api/v1/shops/{shopId}/orders/{id}` | 单据详情（含明细）；金额响应含不可变 `total_amount` / `discount_amount` 与**派生** `paid_amount` / `refunded_amount` / `refundable_amount`（从 `payments` / `refunds` 的 succeeded 行聚合，不落库；已退显式过滤 `kind='sale'`，不含充值退款，ADR-0014/0016） |
 | order | `POST / DELETE /api/v1/shops/{shopId}/orders/{id}/lines` | 加项 / 删项 |
 | order | `POST /api/v1/shops/{shopId}/orders/{id}/submit` | 提交结账 → `pending_payment` |
 | order | `POST /api/v1/shops/{shopId}/orders/{id}/payments` | 组合支付 → `paid` |
-| order | `POST /api/v1/shops/{shopId}/orders/{id}/refunds` | 退款（生成退款单）；请求体 `{amount, reason, refund_entries:[{method, amount}]}` 必须显式携带渠道明细（ADR-0014），`Σ refund_entries = amount`、单渠道累计退款 ≤ 该渠道原支付额，超限返回 `409`（由前端 / 客户协商，系统不自动分摊）；退款单记**退款动作发生时**的 `shift_id` / `operator_id`，不继承原单（ADR-0013） |
+| order | `POST /api/v1/shops/{shopId}/orders/{id}/refunds` | 销售退款（生成 `kind='sale'` 退款单）；请求体 `{amount, reason, refund_entries:[{method, amount}]}` 必须显式携带渠道明细（ADR-0014），`Σ refund_entries = amount`、单渠道累计退款 ≤ 该渠道原支付额，超限返回 `409`（由前端 / 客户协商，系统不自动分摊）；只退实际支付部分、不含券优惠；**禁止跨店退款**；退款单记**退款动作发生时**的 `shift_id` / `operator_id`，不继承原单（ADR-0013/0016） |
+| order | `POST /api/v1/shops/{shopId}/members/{id}/topups/{paymentId}/refunds` | 充值退款（生成 `kind='topup'` 退款单，权限 `member.topup.write`）；请求体同上；前置校验原收款 `kind='topup' AND status='succeeded'` 且属本店会员，**余额不足 → `409 INSUFFICIENT_BALANCE` 整笔拒绝、不做部分退**；单事务内扣回本店 `member_balances` 并写反向 `balance_ledger`，**禁止跨店**（ADR-0016） |
 | order | `POST /api/v1/shops/{shopId}/orders/{id}/cancel` | 取消未支付单据 |
 | order | `GET /api/v1/shops/{shopId}/shifts/current` | 当前班次 |
 | order | `POST /api/v1/shops/{shopId}/shifts/open` | 开班 |
 | order | `POST /api/v1/shops/{shopId}/shifts/{id}/close` | 关班结算 |
 
-> 收款 / 退款归属（[ADR-0013](decisions/0013-payment-and-refund-ownership.md) / [ADR-0014](decisions/0014-derived-amounts-and-refund-entries.md)）：订单支付落 `payments(kind='sale', order_id=<id>)`，会员充值落 `kind='topup'` 且不写 `order_id`；两类收款都记录本次动作的 `shift_id` / `operator_id`。退款单自带退款时的班次与操作人（可与原单不同），累计退款不超过原支付额；退款请求显式带 `refund_entries` 渠道明细，系统只校验、不自动分摊。订单详情的实付 / 已退 / 可退为派生字段（从 succeeded 记录聚合），订单表不存 `paid_amount`；单号日期取 `business_date`（UTC+8 + 门店切点），与日报 / 班次 / 汇总同口径。班次 / 人员维度统计从明细按需聚合，`daily_shop_summary` 粒度不变；本次不新增收款 / 退款专属端点。
+> 收款 / 退款归属（[ADR-0013](decisions/0013-payment-and-refund-ownership.md) / [ADR-0014](decisions/0014-derived-amounts-and-refund-entries.md) / [ADR-0016](decisions/0016-refund-source-and-topup-reversal.md)）：订单支付落 `payments(kind='sale', order_id=<id>)`，会员充值落 `kind='topup'` 且不写 `order_id`；两类收款都记录本次动作的 `shift_id` / `operator_id`。退款以 `kind` 区分销售 / 充值：销售退款挂订单、充值退款挂会员，均自带退款时的班次与操作人（可与原单不同），累计退款不超过原支付额；退款请求显式带 `refund_entries` 渠道明细，系统只校验、不自动分摊，**只退实际支付部分**（券优惠进 `price_adjustments`、不进支付 / 退款渠道），**禁止跨店退款**，充值退款余额不足整笔拒绝。订单详情的实付 / 已退 / 可退为派生字段（从 succeeded 记录聚合，已退过滤 `kind='sale'`），订单表不存 `paid_amount`；单号日期取 `business_date`（UTC+8 + 门店切点），与日报 / 班次 / 汇总同口径。班次 / 人员维度统计从明细按需聚合，`daily_shop_summary` 粒度不变；本次不新增其他收款 / 退款专属端点。
 | inventory | `GET /api/v1/shops/{shopId}/inventory` | 库存余额 |
 | inventory | `POST /api/v1/shops/{shopId}/inventory/adjustments` | 出入库调整 |
 | inventory | `GET /api/v1/shops/{shopId}/inventory/movements` | 库存流水 |

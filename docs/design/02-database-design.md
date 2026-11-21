@@ -60,9 +60,9 @@
 | order | `order_lines` | B | 单据明细（价格快照） | `(shop_id, order_id, line_no)` |
 | order | `price_adjustments` | B | 整单折扣/抹零（已分摊到行） | `(shop_id, order_id, seq)` |
 | order | `payments` | B | 收款（`kind` = `sale` / `topup` / `other`；`sale` 挂订单、`topup` 挂会员） | `(shop_id, idempotency_key)`；`sale` 另受 `(shop_id, order_id)` 外键 |
-| order | `payment_entries` | B | 组合支付的一笔（逐渠道） | `(shop_id, payment_id, seq)` |
-| order | `refunds` | B | 退款单（自带退款班次 / 操作人，无 `refunding` 中间态） | `(shop_id, refund_no)` |
-| order | `refund_entries` | B | 退款逐渠道明细（请求显式携带，系统只校验不自动分摊，ADR-0014） | `(shop_id, refund_id, seq)` |
+| order | `payment_entries` | B | 组合支付的一笔（逐实际资金渠道，不含券） | `(shop_id, payment_id, seq)` |
+| order | `refunds` | B | 退款单（`kind`=sale/topup，`order_id`/`member_id` 二选一；自带退款班次 / 操作人，无 `refunding` 态；禁止跨店） | `(shop_id, refund_no)` |
+| order | `refund_entries` | B | 退款逐渠道明细（请求显式携带，只退实际支付部分，系统只校验不自动分摊，ADR-0014/0016） | `(shop_id, refund_id, seq)` |
 | inventory | `inventory_balances` | B | 按店库存 | `(shop_id, catalog_item_id)` |
 | inventory | `stock_movements` | B | 出入库流水（只追加） | `(shop_id, public_id)` |
 | inventory | `stock_transfers` | B | 跨店调拨单（显式动作） | `(shop_id, transfer_no)` |
@@ -78,7 +78,7 @@
 
 ## 3. 核心 DDL（PG 18.7 语法示例）
 
-以下示例刻意包含「复合外键把 `shop_id` 钉死」这一关键手法：明细无法通过外键挂到别家店的单据上。订单域的收款 / 退款按 [ADR-0013](decisions/0013-payment-and-refund-ownership.md) 定义：`payments.kind` 区分销售 / 充值 / 其他，`sale` 与 `topup` 由 CHECK 约束钉死订单 / 会员的填法；`payments` 与 `refunds` 的 `shift_id` / `operator_id` 记录动作发生时的班次与操作人（只持 ID、不加外键），退款归属不继承订单。
+以下示例刻意包含「复合外键把 `shop_id` 钉死」这一关键手法：明细无法通过外键挂到别家店的单据上。订单域的收款 / 退款按 [ADR-0013](decisions/0013-payment-and-refund-ownership.md) 与 [ADR-0016](decisions/0016-refund-source-and-topup-reversal.md) 定义：`payments.kind` 区分销售 / 充值 / 其他，`sale` 与 `topup` 由 CHECK 约束钉死订单 / 会员的填法；`payments` 与 `refunds` 的 `shift_id` / `operator_id` 记录动作发生时的班次与操作人（只持 ID、不加外键），退款归属不继承订单。`refunds.kind` 对齐原收款（`sale`/`topup`）、`order_id` 可空、`topup` 退款填 `member_id`；退款只退实际支付部分，**券不是支付渠道**、一律进 `price_adjustments`，故 `payment_entries` / `refund_entries` 的 `method` CHECK 不含 `coupon`（仅 `cash`/`balance`/`card`）。
 
 ```sql
 -- +goose Up
@@ -241,7 +241,7 @@ CREATE TABLE payment_entries (
   CONSTRAINT uq_payment_entries_shop_payment_seq UNIQUE (shop_id, payment_id, seq),
   CONSTRAINT fk_payment_entries_payment FOREIGN KEY (shop_id, payment_id)
               REFERENCES payments (shop_id, id),
-  CONSTRAINT ck_payment_entries_method CHECK (method IN ('cash','card','balance','coupon')),
+  CONSTRAINT ck_payment_entries_method CHECK (method IN ('cash','balance','card')),  -- 券是折扣不在此列（ADR-0016）
   CONSTRAINT ck_payment_entries_amount CHECK (amount >= 0)
 );
 CREATE INDEX idx_payment_entries_shop_payment ON payment_entries (shop_id, payment_id);
@@ -263,15 +263,19 @@ CREATE TABLE price_adjustments (
 CREATE INDEX idx_price_adjustments_shop_order ON price_adjustments (shop_id, order_id);
 
 -- 退款：shift_id / operator_id 是退款动作本身的归属，不继承订单（ADR-0013）
+-- kind 对齐原收款（sale/topup）、order_id 可空、topup 填 member_id（ADR-0016）；
+-- 禁止跨店退款：shop_id 强绑原支付与会员本店账；充值退款余额不足整笔拒绝。
 CREATE TABLE refunds (
   id               bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   shop_id          bigint      NOT NULL,
   public_id        uuid        NOT NULL DEFAULT uuidv7(),
   refund_no        text        NOT NULL,
-  payment_id       bigint      NOT NULL,
-  order_id         bigint      NOT NULL,
-  shift_id         bigint,                       -- 退款动作发生时的班次（不继承订单）
-  operator_id      bigint      NOT NULL,          -- 退款操作人（登录账号）
+  kind             text        NOT NULL,             -- sale / topup，等于原 payments.kind
+  payment_id       bigint      NOT NULL,             -- 必引用原收款（同店复合外键）
+  order_id         bigint,                           -- sale 必填；topup 为空（可空）
+  member_id        bigint,                           -- topup 必填：退给哪个会员
+  shift_id         bigint,                           -- 退款动作发生时的班次（不继承订单）
+  operator_id      bigint      NOT NULL,             -- 退款操作人（登录账号）
   amount           numeric(14,2) NOT NULL,
   status           text        NOT NULL DEFAULT 'pending',
   reason           text,
@@ -284,12 +288,18 @@ CREATE TABLE refunds (
   CONSTRAINT fk_refunds_order       FOREIGN KEY (shop_id, order_id)
               REFERENCES orders (shop_id, id),
   CONSTRAINT ck_refunds_status      CHECK (status IN ('pending','succeeded','failed')),
-  CONSTRAINT ck_refunds_amount      CHECK (amount > 0)
+  CONSTRAINT ck_refunds_amount      CHECK (amount > 0),
+  CONSTRAINT ck_refunds_kind        CHECK (kind IN ('sale','topup')),
+  CONSTRAINT ck_refunds_kind_ref    CHECK (
+    (kind = 'sale'  AND order_id IS NOT NULL AND member_id IS NULL) OR
+    (kind = 'topup' AND order_id IS NULL AND member_id IS NOT NULL)
+  )
 );
 CREATE INDEX idx_refunds_shop_created  ON refunds (shop_id, created_at DESC);
 CREATE INDEX idx_refunds_shop_shift    ON refunds (shop_id, shift_id, created_at DESC);
 CREATE INDEX idx_refunds_shop_operator ON refunds (shop_id, operator_id, created_at DESC);
 CREATE INDEX idx_refunds_shop_payment  ON refunds (shop_id, payment_id);
+CREATE INDEX idx_refunds_shop_member   ON refunds (shop_id, member_id, created_at DESC);  -- 会员维度可退额聚合（ADR-0016）
 
 -- 退款逐渠道明细（ADR-0014）：请求显式携带，系统只校验不自动分摊。
 -- SUM(refund_entries.amount) 必须等于 refunds.amount；单渠道累计退款 ≤ 该渠道原支付额。
@@ -304,7 +314,7 @@ CREATE TABLE refund_entries (
   CONSTRAINT uq_refund_entries_shop_refund_seq UNIQUE (shop_id, refund_id, seq),
   CONSTRAINT fk_refund_entries_refund FOREIGN KEY (shop_id, refund_id)
               REFERENCES refunds (shop_id, id),
-  CONSTRAINT ck_refund_entries_method CHECK (method IN ('cash','card','balance','coupon')),
+  CONSTRAINT ck_refund_entries_method CHECK (method IN ('cash','balance','card')),  -- 同上，只退实际支付部分
   CONSTRAINT ck_refund_entries_amount CHECK (amount > 0)
 );
 CREATE INDEX idx_refund_entries_shop_refund ON refund_entries (shop_id, refund_id);
