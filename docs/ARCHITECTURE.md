@@ -121,7 +121,7 @@
 | 金额 | shopspring/decimal ↔ PG `numeric`，禁止 `float64`；单币种 CNY，无币种字段与汇率 |
 | 缓存 | Redis（跨实例）+ ristretto（进程内），带 TTL、写后失效 |
 | 可观测性 | slog JSON 日志 + Prometheus 指标 + OpenTelemetry 链路 |
-| 测试 | 领域逻辑纯函数单测；集成测试用 testcontainers-go 起真实 PG，不 mock 服务层 |
+| 测试 | 领域逻辑纯函数单测；集成测试用真实 PG、不 mock 服务层；起库双模式按环境选 testcontainers-go 或 compose 组网 + `TEST_DATABASE_URL`（ADR-0002） |
 | 部署 | 多阶段构建 → `distroless/static`；`api` / `worker` 无状态、支持编排平台水平扩缩；**单主库读写，暂不读写分离 / 只读副本**；迁移由独立一次性任务执行、定时任务靠数据库锁防重、连接池预算 80 ≤ 100（ADR-0007 / ADR-0008）。**本期落地 Docker 2+2 + Go `cmd/job` + 数据库共享，见 `design/07`**；本地 Compose 仅用于开发 |
 
 **代码评审阻断项**：① 不建实体关联图，结构体之间只持 ID；② 一条查询返回一个场景专用扁平 DTO；③ 不使用数据库视图承载计算口径；④ 动态查询必须用 `$1` 占位符且排序字段走白名单；⑤ 金额禁用浮点；⑥ 写操作必须带幂等键，单号唯一性靠数据库约束并写明范围；⑦ 报表导出流式写出；⑧ 跨店权限判定不缓存；⑨ 集成测试用真实 PG 容器；⑩ **不引入 `tenant_id` / `org_id` / `company_id` 或任何上层隔离维度**（ADR-0003），也不引入门店组 / 分组实体（ADR-0005）；⑪ **不把当前门店做成服务端状态**：禁止 `users.shop_id` / `shops.owner_user_id` 单外键、`current_shop` 表、切换端点或把当前门店写进 JWT，单店请求缺 `X-Shop-Id` 必须报 400（ADR-0006）；⑫ **不引入 R1 范围外的外部 SDK、只读副本 / 读写分离、内部往来账或自动清分**，不在进程启动时跑迁移，审计记录只允许 worker 清理任务删除（ADR-0007）。

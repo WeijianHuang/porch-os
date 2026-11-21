@@ -162,7 +162,7 @@ func (uc *Checkout) Pay(ctx context.Context, cmd PayCommand) (Result, error) {
 |---|---|---|
 | 领域单测 | `testing` + 表驱动 | 计价与分摊、状态机 `CanTransition`、折叠纯函数 |
 | 用例单测 | `testify` | 编排与错误分支（port 用假实现） |
-| 集成测试 | `testcontainers-go` 真实 PG 18.7 | 迁移 Up/Down、唯一约束、复合外键、隔离、幂等重放、`EXPLAIN` 计划 |
+| 集成测试 | 真实 PG 18.7；起库双模式：`testcontainers-go` 自起容器 / compose 组网 + `TEST_DATABASE_URL`（按环境选，见 ADR-0002） | 迁移 Up/Down、唯一约束、复合外键、隔离、幂等重放、`EXPLAIN` 计划 |
 | 契约测试 | OpenAPI diff + 响应快照 | 字段集合与类型，动态值归一化 |
 | 端到端 | 关键流程冒烟 | 开单 → 结账 → 退款 → 日报 |
 

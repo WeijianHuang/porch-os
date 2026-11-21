@@ -463,7 +463,7 @@ $$;
 | 计划测试 | 关键查询 `EXPLAIN` 存档，断言不出现大表 `Seq Scan` |
 | 保留测试 | 插入跨越 30 天日界（UTC+8）的审计记录，断言清理任务只删超期行、不触碰任何业务单据与流水，且业务请求无法更新 / 删除审计记录；`audit_log_cleanup_runs` 留下成功痕迹、双 worker 副本不重复执行（ADR-0007 / 0008，见 [08](08-audit-retention.md) §6） |
 
-集成测试用 `testcontainers-go` 起真实 PG，不 mock 数据访问层（ADR-0002 阻断项 ⑨）。
+集成测试用**真实 PG 18.7**，不 mock 数据访问层（ADR-0002 阻断项 ⑨）。起库支持两种并列模式，按开发者环境任选：① `testcontainers-go` 由测试进程自起容器（本机有 Go + Unix socket / CI）；② compose 组网（`docker compose up -d db` + `TEST_DATABASE_URL`，适合全 Docker / Windows Docker Desktop）。两者共用同一套用例，差异仅在如何取得连接串——测试代码统一从辅助函数读取（有环境变量则直连，否则回退 testcontainers），详见 [ADR-0002](../decisions/0002-go-backend-stack.md)「集成测试的两种模式」。
 
 ---
 

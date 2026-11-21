@@ -52,11 +52,18 @@ Porch OS 是通用多店经营系统，负载特征决定选型，而不是反�
 | 实时能力 | **coder/websocket** | context 感知，心跳与断线重连可控 |
 | Excel 导出 | **excelize/v2 `StreamWriter`** | 流式写出，避免全量读进内存 |
 | 依赖注入 | **google/wire** | 编译期生成，无反射 |
-| 测试 | **testing + testify + testcontainers-go** | 领域逻辑纯函数单测；集成测试起真实 PG 容器，不 mock 服务层 |
+| 测试 | **testing + testify**；集成测试的真实 PG 支持**两种并列模式**（按开发者环境选择）：① **testcontainers-go**（测试进程自起 PG 容器，适合本机有 Go + Unix socket 的环境及 CI）；② **compose 组网**（`docker compose up -d db` 起 PG，测试容器 / 进程经共享 Docker 网络 + `TEST_DATABASE_URL` 连接，适合全 Docker 或 Windows Docker Desktop 环境）。**不变约束**：两种模式都必须连真实 PG 18.7、不 mock 服务层 | 领域逻辑纯函数单测；集成测试的真实数据库不打折，只把「谁负责起库」按环境解耦。Windows 命名管道不能挂进 Linux 容器，全 Docker 场景用 compose 组网避开该痛点 |
 | 静态检查 | **golangci-lint** + **govulncheck** | 统一 lint 与依赖漏洞扫描 |
 | 部署 | 多阶段构建 → `distroless/static` | 镜像小、攻击面小 |
 
 R0 阶段的引导骨架（`cmd/porch-os`）只用标准库提供 `/health`，零外部依赖，目的是让 CI 具备可复现的编译与测试基线；上表依赖从 R1 起按模块逐步引入。
+
+**集成测试的两种模式（2026-11-21 补充）**：本工程多人维护、开发环境各异，测试基础设施不绑定单一环境假设。不变的只有一条——**集成测试必须连真实 PG 18.7、不 mock 服务层**（下方关键约束第 9 条）；至于「这个 PG 由谁启动、测试怎么连上」，允许两种并列实现，开发者按手头环境任选：
+
+- **模式 A · testcontainers-go**：测试进程通过代码动态起 PG 容器，用随机端口，测试结束自动清理。适合本机已装 Go、且 Docker daemon 暴露为 Unix socket 的环境（含 CI 的 ubuntu runner）。
+- **模式 B · compose 组网**：用仓库自带 `docker compose up -d db` 起一个常驻 PG，测试进程 / 测试容器加入同一 Docker 网络，经服务名 `db` 与 `TEST_DATABASE_URL` 连接。适合全 Docker 开发（本机不装 Go，连测试也在 `golang` 容器里跑）或 Windows Docker Desktop——后者用 Windows 命名管道（`//./pipe/docker_engine`），无法挂进 Linux 测试容器，testcontainers 的 DinD 路线在此不通。
+
+两种模式共用同一套测试用例与断言，差异仅在「测试启动时如何取得数据库连接串」：模式 A 由 testcontainers 提供，模式 B 由 `TEST_DATABASE_URL` 环境变量提供。测试代码应统一从一个辅助函数读取连接串（有环境变量则直连，否则回退到 testcontainers），使同一份集成测试在两种环境下都能跑。模式 B 不改变 ADR-0001 的 PG 版本锁定，也不放宽「真实数据库」这条约束。
 
 ## 关键约束（代码评审阻断项）
 
@@ -68,7 +75,7 @@ R0 阶段的引导骨架（`cmd/porch-os`）只用标准库提供 `/health`，�
 6. **所有产生业务副作用的写操作提供幂等键**；单号唯一性靠数据库约束，且必须写明「店内唯一」还是「全局唯一」，不能靠应用层拼接。可用 PG 18 的 `uuidv7()` 生成时间有序单号。
 7. **报表导出流式写出**，禁止 `readAll` 之后再返回。
 8. **跨店权限判定结果不缓存**，刷新令牌后必须立即生效。
-9. **集成测试用真实 PG 容器**，不为提速在集成测试里 mock 服务层。
+9. **集成测试用真实 PG 18.7**，不为提速在集成测试里 mock 服务层。起库方式按环境选 testcontainers-go 或 compose 组网（见「集成测试的两种模式」），但「真实数据库」这条不变。
 
 ## 明确不选
 
