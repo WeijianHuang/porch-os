@@ -79,6 +79,9 @@ type BoardMember struct {
 	DutyStatus  string `json:"duty_status"`
 	State       string `json:"state"`
 	Primary     bool   `json:"is_primary"`
+	// ADR-0017: current card and the reserved order-domain remaining minutes.
+	IDCard                  *CardRef `json:"id_card"`
+	ServiceRemainingMinutes *int     `json:"service_remaining_minutes"`
 }
 
 type BoardQueue struct {
@@ -91,13 +94,15 @@ type BoardQueue struct {
 }
 
 type BoardExecutor struct {
-	PublicID     string `json:"public_id"`
-	Code         string `json:"code"`
-	DisplayName  string `json:"display_name"`
-	DutyStatus   string `json:"duty_status"`
-	State        string `json:"state"`
-	PrimaryQueue string `json:"primary_queue_id"`
-	StopRotation bool   `json:"stop_rotation"`
+	PublicID                string   `json:"public_id"`
+	Code                    string   `json:"code"`
+	DisplayName             string   `json:"display_name"`
+	DutyStatus              string   `json:"duty_status"`
+	State                   string   `json:"state"`
+	PrimaryQueue            string   `json:"primary_queue_id"`
+	StopRotation            bool     `json:"stop_rotation"`
+	IDCard                  *CardRef `json:"id_card"`
+	ServiceRemainingMinutes *int     `json:"service_remaining_minutes"`
 }
 
 type Board struct {
@@ -191,7 +196,29 @@ func (s *Store) SchedulingBoard(ctx context.Context, q DBTX, shopID int64) (Boar
 		}
 		b.Executors = append(b.Executors, v)
 	}
-	return b, erows.Err()
+	if err := erows.Err(); err != nil {
+		return b, err
+	}
+
+	// ADR-0017: one extra query folds the current card into every member; no
+	// per-row lookup. Remaining minutes stay nil until the order domain lands.
+	cards, err := CurrentCardByStaff(ctx, q, shopID)
+	if err != nil {
+		return b, err
+	}
+	for i := range b.Members {
+		if ref, ok := cards[b.Members[i].ExecutorID]; ok {
+			b.Members[i].IDCard = &ref
+		}
+		for j := range b.Executors {
+			if b.Executors[j].PublicID == b.Members[i].ExecutorID {
+				if c, ok := cards[b.Executors[j].PublicID]; ok {
+					b.Executors[j].IDCard = &c
+				}
+			}
+		}
+	}
+	return b, nil
 }
 
 func (s *Store) SchedulingRules(ctx context.Context, q DBTX, shopID int64) ([]SchedulingRule, error) {

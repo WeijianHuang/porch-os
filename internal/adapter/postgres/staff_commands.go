@@ -22,6 +22,9 @@ type StaffSummary struct {
 	StopRotation   bool                  `json:"stop_rotation"`
 	PrimaryQueueID string                `json:"primary_queue_id"`
 	Queues         []queue.StaffQueueRef `json:"queues"`
+	// ADR-0017: current card and the reserved order-domain remaining minutes.
+	IDCard                  *CardRef `json:"id_card"`
+	ServiceRemainingMinutes *int     `json:"service_remaining_minutes"`
 }
 
 const staffSummarySelect = `
@@ -74,6 +77,15 @@ func (s *Store) ListStaffSummaries(ctx context.Context, q DBTX, shopID int64) ([
 	for i := range out {
 		if list, ok := byStaff[out[i].PublicID]; ok {
 			out[i].Queues = list
+		}
+	}
+	cards, err := CurrentCardByStaff(ctx, q, shopID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if ref, ok := cards[out[i].PublicID]; ok {
+			out[i].IDCard = &ref
 		}
 	}
 	return out, nil

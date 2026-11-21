@@ -104,6 +104,14 @@ func NewRouter(store *postgres.Store, cfg config.Config) *gin.Engine {
 			one.POST("/staff/:staffId/state", h.SetStaffState)
 			one.PATCH("/staff/:staffId/rotation", h.SetStaffRotation)
 
+			// ID cards (ADR-0017 / design/14): shop-scoped resource with a
+			// single active holder, audited and idempotent writes.
+			one.GET("/cards", h.ListCards)
+			one.POST("/cards", h.CreateCard)
+			one.PATCH("/cards/:cardId", h.UpdateCard)
+			one.POST("/cards/:cardId/hold", h.HoldCard)
+			one.POST("/cards/:cardId/release", h.ReleaseCard)
+
 			// Rooms and floors (ADR-0011 / design/11): shop-scoped, one room has
 			// a shop-local code and an integer floor grouping dimension.
 			one.GET("/rooms", h.ListRooms)

@@ -103,6 +103,10 @@
 |---|---|---|---|
 | `INVALID_ARGUMENT` | 400 | 否 | 参数格式、缺失必填、非法排序字段 |
 | `STATE_UNCHANGED` | 400 | 否 | 服务人员已处于目标状态（ADR-0015 人工改状态） |
+| `CARD_INACTIVE` | 400 | 否 | 领取已失效的 ID 卡（ADR-0017） |
+| `CARD_HELD` | 409 | 否 | ID 卡已被他人持有（ADR-0017） |
+| `STAFF_ALREADY_HOLDS_CARD` | 409 | 否 | 该服务员已持有一张卡（ADR-0017） |
+| `CARD_IN_USE` | 409 | 否 | 持有的 ID 卡被置为失效，须先释放（ADR-0017） |
 | `AUDIT_RETENTION_WINDOW_EXCEEDED` | 400 | 否 | 审计查询 / 导出的 `created_at_from` 早于保留窗口 cutoff；`details` 带 `earliest_queryable_at`、`retention_days`、`cutoff_at`（ADR-0008 / [08](08-audit-retention.md) §4） |
 | `SHOP_CONTEXT_REQUIRED` | 400 | 否 | 单店业务请求未显式指定当前门店（不再按可见门店数量隐式默认，ADR-0006） |
 | `UNAUTHENTICATED` | 401 | 否 | 令牌缺失/过期/无效 |

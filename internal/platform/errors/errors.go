@@ -41,15 +41,15 @@ func WithDetails(e *APIError, details ...Detail) *APIError {
 
 func mapCode(code string) (int, bool) {
 	switch code {
-	case "INVALID_ARGUMENT", "STATE_UNCHANGED", "SHOP_CONTEXT_REQUIRED", "AUDIT_RETENTION_WINDOW_EXCEEDED":
+	case "INVALID_ARGUMENT", "STATE_UNCHANGED", "SHOP_CONTEXT_REQUIRED", "AUDIT_RETENTION_WINDOW_EXCEEDED", "CARD_INACTIVE":
 		return http.StatusBadRequest, false
 	case "UNAUTHENTICATED":
 		return http.StatusUnauthorized, false
 	case "PERMISSION_DENIED":
 		return http.StatusForbidden, false
-	case "NOT_FOUND", "SNAPSHOT_MISSING", "EVENT_NOT_FOUND", "TASK_TYPE_NOT_FOUND":
+	case "NOT_FOUND", "SNAPSHOT_MISSING", "EVENT_NOT_FOUND", "TASK_TYPE_NOT_FOUND", "CARD_NOT_FOUND", "STAFF_NOT_FOUND":
 		return http.StatusNotFound, false
-	case "EXECUTOR_BUSY":
+	case "EXECUTOR_BUSY", "CARD_HELD", "STAFF_ALREADY_HOLDS_CARD", "CARD_IN_USE":
 		return http.StatusConflict, false
 	case "NO_PRIMARY_QUEUE", "INVALID_STATE", "EXECUTOR_NOT_FOUND", "SITE_NOT_FOUND", "QUEUE_NOT_FOUND", "AUDIT_ACTOR_MISSING":
 		return http.StatusBadRequest, false
