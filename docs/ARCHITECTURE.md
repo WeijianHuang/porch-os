@@ -181,5 +181,6 @@ R0 引导骨架仅用标准库提供 `/health`，零外部依赖，作为 CI 基
 | [12 多队列调度规则引擎](design/12-scheduling-engine.md) | 复用 staff 作为执行者、8 步判定链 + 6 种联动 + 各自落位 + 逐队列置顶，PG 落表与审计（ADR-0012 扩展） |
 | [13 服务人员状态控制](design/13-staff-controls.md) | 8 个展示状态桶、6 个可人工设置状态、停止轮转、队列内移动位次、留位复用置顶（ADR-0015 扩展，无 schema 变更） |
 | [14 ID 卡与方形服务格子](design/14-id-cards-and-square-slots.md) | 店内 ID 卡（多人先后持有、同一时刻一人一卡、生效失效）、看板持卡投影、剩余分钟预留、正方形格子（ADR-0017 扩展，迁移 `00008`） |
+| [15 服务类目录项时长](design/15-service-duration.md) | `catalog_items.duration_minutes`（服务 1..1440 分钟、商品 `null`）、目录端点增量、`cmd/job seed-demo` 幂等种子（ADR-0018 扩展，迁移 `00009`） |
 
 该套文档**已由 [ADR-0008](decisions/0008-design-freeze-and-nq-resolutions.md) 冻结**，以本文与 `docs/decisions/` 下已接受的 ADR 为上游约束。**OQ-01–08、NQ-01–16 与 DP-01–07 全部关闭**（`00` 第 8 节）。冻结后，任何改动 schema、唯一性范围、隔离条件、状态机、错误语义、端点清单，或 `07`–`09` 中固定的副本数 / 连接池 / 保留天数 / 清理窗口基线的 PR，必须**先改设计或 ADR 再改代码**并同步对应分册；只改实现、不改契约的 PR 不需要改设计文档。

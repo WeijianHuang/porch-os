@@ -346,10 +346,11 @@ func (h *Handler) CreateCatalogItem(c *gin.Context) {
 		return
 	}
 	var req struct {
-		SKU       string `json:"sku"`
-		Name      string `json:"name"`
-		Type      string `json:"type"`
-		BasePrice string `json:"base_price"`
+		SKU             string `json:"sku"`
+		Name            string `json:"name"`
+		Type            string `json:"type"`
+		BasePrice       string `json:"base_price"`
+		DurationMinutes *int   `json:"duration_minutes"`
 	}
 	if err := decode(c, &req); err != nil || req.SKU == "" || req.Name == "" {
 		badRequest(c, errors.New("sku and name are required"))
@@ -362,17 +363,37 @@ func (h *Handler) CreateCatalogItem(c *gin.Context) {
 		badRequest(c, errors.New("invalid type"))
 		return
 	}
+	if err := validateItemDuration(req.Type, req.DurationMinutes); err != nil {
+		badRequest(c, err)
+		return
+	}
 	if _, err := money.FromString(req.BasePrice); err != nil {
 		badRequest(c, err)
 		return
 	}
 	h.runWrite(c, func(tx pgx.Tx) (int, any, error) {
-		v, err := h.Store.CreateCatalogItem(c.Request.Context(), tx, req.SKU, req.Name, req.Type, req.BasePrice)
+		v, err := h.Store.CreateCatalogItem(c.Request.Context(), tx, req.SKU, req.Name, req.Type, req.BasePrice, req.DurationMinutes)
 		if err != nil {
 			return 0, nil, pgErr(err)
 		}
 		return 201, h.envelope(c, v, nil), nil
 	})
+}
+
+// validateItemDuration enforces the ADR-0018 type/duration invariant at the
+// API edge (the CHECK constraint is the DB backstop): products carry no
+// duration; services require an integer in 1..1440 minutes.
+func validateItemDuration(itemType string, minutes *int) error {
+	if itemType == "product" {
+		if minutes != nil {
+			return errors.New("duration_minutes is only allowed for service items")
+		}
+		return nil
+	}
+	if minutes == nil || *minutes < 1 || *minutes > 1440 {
+		return errors.New("service items require duration_minutes between 1 and 1440")
+	}
+	return nil
 }
 
 func (h *Handler) GetCatalogItem(c *gin.Context) {
@@ -393,7 +414,7 @@ func (h *Handler) UpdateCatalogItem(c *gin.Context) {
 		fail(c, apierrors.PermissionDenied)
 		return
 	}
-	_, itemID, err := h.Store.CatalogItem(c.Request.Context(), nil, c.Param("id"))
+	existing, itemID, err := h.Store.CatalogItem(c.Request.Context(), nil, c.Param("id"))
 	if postgres.IsNoRows(err) {
 		fail(c, apierrors.NotFound)
 		return
@@ -403,14 +424,23 @@ func (h *Handler) UpdateCatalogItem(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Name      string `json:"name"`
-		BasePrice string `json:"base_price"`
-		Active    *bool  `json:"active"`
-		Version   int    `json:"version"`
+		Name            string `json:"name"`
+		BasePrice       string `json:"base_price"`
+		Active          *bool  `json:"active"`
+		Version         int    `json:"version"`
+		DurationMinutes *int   `json:"duration_minutes"`
 	}
 	if err := decode(c, &req); err != nil || req.Name == "" || req.Version < 0 {
 		badRequest(c, errors.New("name and version are required"))
 		return
+	}
+	// `type` is immutable on update (ADR-0018); validate the duration against
+	// the persisted type. Omitted duration keeps the stored value.
+	if req.DurationMinutes != nil {
+		if err := validateItemDuration(existing.Type, req.DurationMinutes); err != nil {
+			badRequest(c, err)
+			return
+		}
 	}
 	if _, err := money.FromString(req.BasePrice); err != nil {
 		badRequest(c, err)
@@ -421,7 +451,7 @@ func (h *Handler) UpdateCatalogItem(c *gin.Context) {
 		active = *req.Active
 	}
 	h.runWrite(c, func(tx pgx.Tx) (int, any, error) {
-		v, err := h.Store.UpdateCatalogItem(c.Request.Context(), tx, itemID, req.Name, req.BasePrice, active, req.Version)
+		v, err := h.Store.UpdateCatalogItem(c.Request.Context(), tx, itemID, req.Name, req.BasePrice, req.DurationMinutes, active, req.Version)
 		if postgres.IsNoRows(err) {
 			return 0, nil, apierrors.New("VERSION_CONFLICT", "并发冲突，请重读后重试")
 		}

@@ -21,7 +21,7 @@ import (
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	if len(os.Args) < 2 {
-		fatal(errors.New("usage: job <migrate|seed-user|audit-cleanup>"))
+		fatal(errors.New("usage: job <migrate|seed-user|seed-demo|audit-cleanup>"))
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -34,6 +34,8 @@ func main() {
 		err = migrate(ctx, cfg)
 	case "seed-user":
 		err = seedUser(ctx, cfg)
+	case "seed-demo":
+		err = seedDemo(ctx, cfg)
 	case "audit-cleanup":
 		err = auditCleanup(ctx, cfg)
 	default:

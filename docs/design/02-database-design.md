@@ -40,7 +40,7 @@
 | identity | `refresh_tokens` | A | 刷新令牌（存哈希） | `token_hash` 全局唯一 |
 | identity | `audit_logs` | P | 业务请求只追加、不可改删；与门店相关的事件带 `shop_id`，账号级事件为 `NULL`；属**基础设施 / 运行期数据表**，不参与业务隔离判定；**默认保留 30 天、可配置、由 worker 定时分批删除**（ADR-0007），不归档、不分区 | — |
 | catalog | `catalog_categories` | A | 目录分类 | `(parent_id, code)` |
-| catalog | `catalog_items` | A | 商品/服务目录 | `sku` 全局唯一 |
+| catalog | `catalog_items` | A | 商品/服务目录（服务项带 `duration_minutes`，ADR-0018） | `sku` 全局唯一 |
 | catalog | `shop_catalog_overrides` | B | 按店价格、上下架 | `(shop_id, catalog_item_id)` |
 | member | `members` | A | 会员档案 | `phone` 全局唯一 |
 | member | `member_balances` | B | 按店余额 | `(shop_id, member_id)` |
@@ -124,9 +124,16 @@ CREATE TABLE catalog_items (
   type        text        NOT NULL DEFAULT 'product',
   base_price  numeric(14,2) NOT NULL DEFAULT 0,
   attributes  jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  -- ADR-0018：服务标称时长（分钟）；商品必须为 NULL，服务必须 1..1440。
+  -- 与看板 service_remaining_minutes（订单派生、本期恒 null）是两个字段。
+  duration_minutes integer,
   created_at  timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT uq_catalog_items_sku UNIQUE (sku),
-  CONSTRAINT ck_catalog_items_type CHECK (type IN ('product','service'))
+  CONSTRAINT ck_catalog_items_type CHECK (type IN ('product','service')),
+  CONSTRAINT ck_catalog_items_duration CHECK (
+    (type = 'product' AND duration_minutes IS NULL) OR
+    (type = 'service' AND duration_minutes BETWEEN 1 AND 1440)
+  )
 );
 
 -- 一人多店 / 一店多人（ADR-0006）：可见门店集合的唯一授权来源。

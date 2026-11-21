@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/Masterminds/squirrel"
@@ -9,16 +10,17 @@ import (
 )
 
 type CatalogItem struct {
-	PublicID  string    `json:"public_id"`
-	SKU       string    `json:"sku"`
-	Name      string    `json:"name"`
-	Type      string    `json:"type"`
-	BasePrice string    `json:"base_price"`
-	Active    bool      `json:"active"`
-	Version   int       `json:"version"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	ID        int64     `json:"-"`
+	PublicID        string    `json:"public_id"`
+	SKU             string    `json:"sku"`
+	Name            string    `json:"name"`
+	Type            string    `json:"type"`
+	BasePrice       string    `json:"base_price"`
+	DurationMinutes *int      `json:"duration_minutes"` // ADR-0018: service nominal minutes; product -> null
+	Active          bool      `json:"active"`
+	Version         int       `json:"version"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+	ID              int64     `json:"-"`
 }
 
 type Category struct {
@@ -29,11 +31,16 @@ type Category struct {
 	SortOrder int     `json:"sort_order"`
 }
 
-const itemCols = "public_id::text, sku, name, type, base_price::text, active, version, created_at, updated_at, id"
+const itemCols = "public_id::text, sku, name, type, base_price::text, duration_minutes, active, version, created_at, updated_at, id"
 
 func scanItem(row pgx.Row) (CatalogItem, error) {
 	var v CatalogItem
-	err := row.Scan(&v.PublicID, &v.SKU, &v.Name, &v.Type, &v.BasePrice, &v.Active, &v.Version, &v.CreatedAt, &v.UpdatedAt, &v.ID)
+	var duration sql.NullInt32
+	err := row.Scan(&v.PublicID, &v.SKU, &v.Name, &v.Type, &v.BasePrice, &duration, &v.Active, &v.Version, &v.CreatedAt, &v.UpdatedAt, &v.ID)
+	if duration.Valid {
+		d := int(duration.Int32)
+		v.DurationMinutes = &d
+	}
 	v.CreatedAt, v.UpdatedAt = utc(v.CreatedAt), utc(v.UpdatedAt)
 	return v, err
 }
@@ -88,21 +95,23 @@ func (s *Store) CatalogItem(ctx context.Context, q DBTX, publicID string) (Catal
 	return v, id, err
 }
 
-func (s *Store) CreateCatalogItem(ctx context.Context, tx pgx.Tx, sku, name, itemType, basePrice string) (CatalogItem, error) {
+func (s *Store) CreateCatalogItem(ctx context.Context, tx pgx.Tx, sku, name, itemType, basePrice string, durationMinutes *int) (CatalogItem, error) {
 	var id int64
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO catalog_items (sku,name,type,base_price) VALUES ($1,$2,$3,$4::numeric)
-		RETURNING id`, sku, name, itemType, basePrice).Scan(&id); err != nil {
+		INSERT INTO catalog_items (sku,name,type,base_price,duration_minutes)
+		VALUES ($1,$2,$3,$4::numeric,$5)
+		RETURNING id`, sku, name, itemType, basePrice, durationMinutes).Scan(&id); err != nil {
 		return CatalogItem{}, err
 	}
 	return scanItem(tx.QueryRow(ctx, `SELECT `+itemCols+` FROM catalog_items WHERE id=$1`, id))
 }
 
-func (s *Store) UpdateCatalogItem(ctx context.Context, tx pgx.Tx, id int64, name, basePrice string, active bool, version int) (CatalogItem, error) {
+func (s *Store) UpdateCatalogItem(ctx context.Context, tx pgx.Tx, id int64, name, basePrice string, durationMinutes *int, active bool, version int) (CatalogItem, error) {
 	tag, err := tx.Exec(ctx, `
-		UPDATE catalog_items SET name=$2, base_price=$3::numeric, active=$4,
-		  version=version+1, updated_at=now()
-		WHERE id=$1 AND version=$5`, id, name, basePrice, active, version)
+		UPDATE catalog_items SET name=$2, base_price=$3::numeric,
+		  duration_minutes=CASE WHEN $4::integer IS NULL THEN duration_minutes ELSE $4::integer END,
+		  active=$5, version=version+1, updated_at=now()
+		WHERE id=$1 AND version=$6`, id, name, basePrice, durationMinutes, active, version)
 	if err != nil {
 		return CatalogItem{}, err
 	}

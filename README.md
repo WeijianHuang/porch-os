@@ -149,7 +149,7 @@ CHANGELOG.md        变更记录
 Prerequisites: Go 1.25+ (matching `go.mod`) and a running PostgreSQL 18.7 (`docker compose up -d db`).
 
 ```bash
-cp .env.example .env          # set DATABASE_URL / JWT_SECRET / EXPECTED_SCHEMA_VERSION=7
+cp .env.example .env          # set DATABASE_URL / JWT_SECRET / EXPECTED_SCHEMA_VERSION=9
 go run ./cmd/job migrate      # the ONLY process allowed to change the schema
 SEED_LOGIN=admin SEED_PASSWORD=<local-password> go run ./cmd/job seed-user
 go run ./cmd/api              # /health and /ready on PORT (default 8080)
@@ -189,6 +189,8 @@ nor `worker` runs migrations at startup.
 | `docs/decisions/0011-rooms-and-floors.md` | 房间与楼层（第三次受控扩展，schema 版本 6） |
 | `docs/decisions/0012-scheduling-engine.md` | 多队列调度规则引擎深度整合（第四次受控扩展，复用 staff 作为执行者，schema 版本 7） |
 | `docs/decisions/0015-staff-state-and-position-controls.md` | 服务人员状态、停止轮转与位次人工控制（第七次受控扩展，无 schema 变更） |
+| `docs/decisions/0017-id-cards-and-square-slots.md` | 店内 ID 卡与方形服务格子（第九次受控扩展，schema 版本 8） |
+| `docs/decisions/0018-service-duration.md` | 服务类目录项时长 `duration_minutes` 与幂等种子（第十次受控扩展，schema 版本 9） |
 | `docs/decisions/0008-design-freeze-and-nq-resolutions.md` | NQ-01–16 全部决议、DP-01–07 接受、详细设计冻结、R1 范围与验收、Docker 2+2 / Go Job / 连接池 / 审计 / 容量基线 |
 | `CONTRIBUTING.md` | 分支、提交与 PR 约定 |
 | `CHANGELOG.md` | 变更记录 |

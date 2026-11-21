@@ -177,7 +177,7 @@
 | shop | `GET / POST /api/v1/shops` | 门店列表 / 新建 |
 | shop | `GET / PATCH /api/v1/shops/{shopId}` | 门店详情 / 修改 |
 | shop | `GET / PATCH /api/v1/shops/{shopId}/settings` | 门店参数 |
-| catalog | `GET / POST /api/v1/catalog-items` | 目录列表 / 新建 |
+| catalog | `GET / POST /api/v1/catalog-items` | 目录列表 / 新建（服务项带 `duration_minutes`，ADR-0018） |
 | catalog | `GET / PATCH /api/v1/catalog-items/{id}` | 目录项详情 / 修改 |
 | catalog | `GET /api/v1/catalog-categories` | 分类树 |
 | catalog | `GET / PUT /api/v1/shops/{shopId}/catalog-overrides/{itemId}` | 按店价格与上下架 |
