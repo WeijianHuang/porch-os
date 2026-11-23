@@ -185,6 +185,59 @@ GET /exports/{id}/download ──► 流式下载
 
 > 边界：审计日志定时删除 ≠ 业务数据归档；运行期清理 ≠ 业务单据删除；业务请求不可删审计 ≠ 清理任务不可删。
 
+## F-09 订单绑定卡 / 房间与同行组合并 / 拆分（ADR-0022）
+
+一单一卡（1:1）+ 一单一房间 + 多单成组共同结算；付款仍逐单走 F-01 阶段 D，组只做编排与派生合计，不新增付款主体。
+
+### 阶段 A｜绑卡 / 换卡
+
+| 步 | 动作 | 失败 |
+|---|---|---|
+| 1 | 校验卡属本店、`status='active'`、当前被本店人员持有（`card_holdings.released_at IS NULL`）；订单未结算、无 succeeded 支付 | `409 CARD_NOT_HELD` / `CARD_INACTIVE` / `ORDER_SETTLED` |
+| 2 | 对 `id_cards` 行 `SELECT ... FOR UPDATE` 串行化同一张卡（沿用 ADR-0017 并发手法） | — |
+| 3 | 事务：`UPDATE orders SET card_id=<id>, card_released_at=NULL, card_release_reason=NULL, version=version+1`；写审计（`target_type='order'`）+ 事件 `order.card_bound` / `.card_replaced` + 幂等记录 | 唯一冲突 → `409 CARD_BOUND_TO_ORDER`；版本冲突 → `409 VERSION_CONFLICT` |
+
+**阶段 A2｜绑房间 / 换房间**：校验房间属本店且 `status='active'`、订单未结算（同上表失败语义）；事务内 `UPDATE orders SET room_id=<id>, version=version+1`，写审计 + 事件 `order.room_bound`。不存在的房间 → `404 ROOM_NOT_FOUND`、已停用 → `409 ROOM_INACTIVE`、跨店 → `403`。一房间可关联多张单，不做互斥；房间不落快照。
+
+### 阶段 B｜提交结账（F-01 阶段 C 的增量校验）
+
+`POST /orders/{id}/submit` 在调用 `Quote` 重算之前先断言：① 有效卡绑定（`card_id IS NOT NULL AND card_released_at IS NULL`）且卡仍 `active`；② `room_id IS NOT NULL`。否则 `422 ORDER_CARD_REQUIRED` / `ORDER_ROOM_REQUIRED`。这是 ADR-0022 对 ADR-0017「不校验开单必须持卡」与 ADR-0011「房间不与单据绑定」边界的显式修订；存量缺卡 / 缺房间草稿同样受此约束。
+
+### 阶段 C｜合并（独立单入组 / 跨组挪入）
+
+| 步 | 动作 | 失败 |
+|---|---|---|
+| 1 | 对目标组 `SELECT ... FOR UPDATE` + 校验 `version`（乐观锁） | `409 GROUP_NOT_OPEN` / `VERSION_CONFLICT` |
+| 2 | 每个入组单校验属本店、未结算、无 succeeded 支付 | `409 ORDER_SETTLED` / `403` |
+| 3 | 已在别的 `open` 组的单：同事务把原活跃成员行置 `left_at = now()`；原组因此无活跃成员 → 同事务置 `closed` | — |
+| 4 | 目标组插成员行（`joined_at = now()`）；写审计 + 事件 `companion_group.member_added` + 幂等记录 | 已属本组 → `400 MEMBER_UNCHANGED`；唯一冲突 → `409` |
+
+### 阶段 D｜拆分（成员出组恢复独立）
+
+1. 校验组 `open`、`version` 匹配、订单是活跃成员 → `409 GROUP_NOT_OPEN` / `404 MEMBER_NOT_IN_GROUP`。
+2. 事务：成员行置 `left_at = now()` 留史（**不删行**）；组无活跃成员则同事务置 `closed`；写审计 + 事件 `companion_group.member_removed`。
+3. **不改订单的 `card_id`、明细、金额**；出组单恢复为独立单，照常走 F-01 / F-02。
+
+### 阶段 E｜组详情与关闭
+
+- 详情：一次查组 + 一次查活跃成员 + 一次聚合派生金额（沿用 ADR-0014 的 succeeded payments/refunds 口径），纯函数算 `payable_total = Σ payable_amount`、`paid_total = Σ paid_amount`，**不落库**；无 N+1。
+- 付款仍逐单 `POST /orders/{id}/payments`；组不产生 `payments` 主体，不做组级扣款 / 退款 / 清分（ADR-0007 NQ-16）。
+- `close` 要求全成员已结算或无活跃成员；`cancel` 要求成员无成功支付；两者皆 `version` 乐观锁 + 终态不可再改。
+
+### 阶段 F｜结算 / 取消自动释放卡（与支付同事务）
+
+| 步 | 动作 | 失败 |
+|---|---|---|
+| 1 | 支付使订单达到 `paid` 且派生 `payable_amount <= 0`（或取消未支付单） | 部分支付未结清 → 不释放 |
+| 2 | `UPDATE orders SET card_released_at=now(), card_release_reason='settled'\|'cancelled' WHERE ... AND card_released_at IS NULL` | 已释放 → 跳过（幂等） |
+| 3 | 若仍有有效卡绑定：`UPDATE card_holdings SET released_at=now(), release_reason='order_settled'\|'order_cancelled' WHERE shop_id/card_id 匹配 AND released_at IS NULL` | 已释放 → 跳过 |
+| 4 | 写审计（`target_type='order'` 的 `card_released`、`target_type='card'` 的 `release`）+ 事件 `order.card_released` / `card.hold_released`（带 `reason`），与支付写入、幂等记录同事务 | 任一步失败 → 整体回滚 |
+
+- `completed`、退款、组关闭不重复触发；手动解绑 / 换卡只结束订单侧绑定（原因 `unbound` / `replaced`），不释放持卡。
+- 释放完成后卡可被其他人领取并绑到新单；订单详情的 `card` 变 null，`card_binding_history` 保留追溯。
+
+> 关键不变量：① 一张 ID 卡同一时刻只被一张有效绑定的订单占用，结清 / 取消后自动释放且卡可由他人复用；② 一张订单同一时刻只属一个 `open` 组；③ 合并 / 拆分只动分组归属，不动卡 / 房间绑定、明细与金额；④ 组的金额全是只读派生；⑤ 订单必有本店房间且房间删除受外键保护。
+
 ## 测试清单（每个流程必测四类）
 
 | 流程 | 正常 | 边界 | 失败 | 重放 / 并发 |
@@ -197,6 +250,8 @@ GET /exports/{id}/download ──► 流式下载
 | F-06 | 授权后立即生效 | 恰好只剩一家可见门店 | 撤销后访问旧门店 | 授权变更与在途请求并发 |
 | F-07 | 多店登录、切换后只显示新门店数据 | 可见集合为空、本地上次选择已被撤销 | 缺 `X-Shop-Id`、切到无权门店、旧门店响应后到 | 切换与在途请求 / 授权撤销并发 |
 | F-08 | 只删除超期审计记录，指标与日志齐全 | 恰好落在 30 天日界（UTC+8）两侧、保留天数改为其它合法值 | 清理任务中途失败、配置非法、业务请求尝试改删审计记录 | 多副本同时触发清理（advisory lock 只放行一个） |
+| F-09 | 绑卡 / 绑房间 → 建组 → 合入两单 → 拆出一单；逐单付款，结清自动释放卡 | 一组仅一成员、跨组合入后原组自动关闭、取消单也释放、房间停用后历史单仍可结算 | 无卡 / 无房间提交、卡已被占用 / 无人持有、房间不存在 / 停用 / 跨店、已结算单改组 / 改卡 / 改房间 | 一卡并发绑两单、一单并发入两组、同幂等键重放（释放事件只写一次） |
+
 
 **每条写用例强制重放一次幂等键并断言副作用只发生一次**；每条隔离用例用两家店 + 两个用户交叉请求，断言响应中不出现对方门店数据。
 
@@ -212,6 +267,7 @@ GET /exports/{id}/download ──► 流式下载
 | F-06 | — | `02` §2 | `03` §3/§7 | `05` §1/§5 |
 | F-07 | `01` §6 | `02` §2/§8 | `03` §3/§7/§8 | `05` §1/§5 |
 | F-08 | `01` §3 | `02` §2/§5/§7/§8 | `03` §8 | `05` §7/§9/§11 |
+| F-09 | `01` §4/§5 | `02` §2/§3（ADR-0022） | `03` §4/§6/§7/§8 | `05` §2/§6 |
 
 ---
 

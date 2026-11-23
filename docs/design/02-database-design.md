@@ -48,7 +48,7 @@
 | queue | `queues` | B | 门店队列（序号 + 名称，门店内各自唯一） | `(shop_id, seq)` / `(shop_id, name)` / `public_id` |
 | queue | `staff` | B | 门店服务人员（店内雇员，可在本店多队列服务；`duty_status` 表示当前在岗 / 下班，无历史） | `(shop_id, code)` / `public_id` |
 | queue | `queue_staff` | B | 服务人员 ↔ 队列（店内多对多，复合外键锁同店；`position` 为队列内密集 1..n 顺序） | `(queue_id, staff_id)` / `(queue_id, position)` |
-| room（[ADR-0011](../decisions/0011-rooms-and-floors.md)） | `rooms` | B | 门店房间（`floor` 整数 `-5..200` 为分组维度，非实体；房间号店内唯一） | `(shop_id, code)` / `public_id` |
+| room（[ADR-0011](../decisions/0011-rooms-and-floors.md)） | `rooms` | B | 门店房间（`floor` 整数 `-5..200` 为分组维度，非实体；房间号店内唯一）；被订单引用，须可 `(shop_id, id)` 供复合外键（ADR-0022） | `(shop_id, code)` / `(shop_id, id)` / `public_id` |
 | scheduling（[ADR-0012](../decisions/0012-scheduling-engine.md)） | `scheduling_rules` | B | 8 步判定链规则（顺序 / 开关 / 作用域 / 命中动作 / 时段可配） | `(shop_id, type, scope, scope_id)` / `public_id` |
 | scheduling | `scheduling_policies` | B | 联动策略（六种传播模式 + 逐队列动作映射，绑定主队列） | `(shop_id, primary_queue_id)` / `public_id` |
 | scheduling | `scheduling_task_types` | B | 任务类型（分组 + 不轮转标记） | `(shop_id, code)` / `public_id` |
@@ -56,8 +56,10 @@
 | scheduling | `scheduling_snapshots` | B | 一次事件的各队列位次前后快照 | `(shop_id, event_id)` |
 | member | `member_visits` | B | 到店记录 | `(shop_id, public_id)` |
 | order | `shifts` | B | 收银班次（`public_id` 供 `/shifts/{id}/close` 对外使用，迁移 `00010`） | `(shop_id, shift_no)` / `public_id`；部分唯一：一店最多一个 `open` |
-| order | `orders` | B | 单据 | **`(shop_id, order_no)` 店内唯一** |
+| order | `orders` | B | 单据；每张单最多绑一张 ID 卡与一个房间（`card_id` / `room_id`，复合外键锁同店）；卡绑定用 `card_released_at` 标记有效 / 释放，结算 / 取消自动释放（ADR-0022） | **`(shop_id, order_no)` 店内唯一**；部分唯一 `(shop_id, card_id) WHERE card_id IS NOT NULL AND card_released_at IS NULL` |
 | order | `order_lines` | B | 单据明细（价格快照） | `(shop_id, order_id, line_no)` |
+| order（[ADR-0022](../decisions/0022-order-card-binding-and-companion-groups.md)） | `companion_groups` | B | 同行组：多张各自绑卡的单据组成一组共同结算；`status` = `open`/`closed`/`cancelled`；不存金额 | `(shop_id, id)` / `public_id` |
+| order | `companion_group_members` | B | 同行组成员（`left_at` 留拆出历史；一单同一时刻只属一个 open 组） | 部分唯一 `(shop_id, order_id) WHERE left_at IS NULL` |
 | order | `order_price_adjustments` | B | 整单让利（`type` 区分券 / 活动 / 抹零 / 手工 / 其他；`title` 账单短标题、`description` 详细原因；券以 `source_id` 预留追溯锚点，ADR-0020；已分摊到行）。**专属于 Order 聚合**：`order_id NOT NULL` + 复合外键钉死订单与同店，无其他业务使用者；充值赠送走 `balance_ledger`，非同构让利另立新表，禁止改成多态关联（见 ADR-0020「表的适用边界」） | `(shop_id, order_id, seq)` |
 | order | `payments` | B | 收款（`kind` = `sale` / `topup` / `other`；`sale` 挂订单、`topup` 挂会员） | `(shop_id, idempotency_key)`；`sale` 另受 `(shop_id, order_id)` 外键 |
 | order | `payment_entries` | B | 组合支付的一笔（逐实际资金渠道，不含券） | `(shop_id, payment_id, seq)` |
@@ -78,7 +80,7 @@
 
 ## 3. 核心 DDL（PG 18.7 语法示例）
 
-以下示例刻意包含「复合外键把 `shop_id` 钉死」这一关键手法：明细无法通过外键挂到别家店的单据上。订单域的收款 / 退款按 [ADR-0013](decisions/0013-payment-and-refund-ownership.md) 与 [ADR-0016](decisions/0016-refund-source-and-topup-reversal.md) 定义：`payments.kind` 区分销售 / 充值 / 其他，`sale` 与 `topup` 由 CHECK 约束钉死订单 / 会员的填法；`payments` 与 `refunds` 的 `shift_id` / `operator_id` 记录动作发生时的班次与操作人（只持 ID、不加外键），退款归属不继承订单。`refunds.kind` 对齐原收款（`sale`/`topup`）、`order_id` 可空、`topup` 退款填 `member_id`；退款只退实际支付部分，**券不是支付渠道**、一律进 `order_price_adjustments`，故 `payment_entries` / `refund_entries` 的 `method` CHECK 不含 `coupon`（仅 `cash`/`balance`/`card`）。
+以下示例刻意包含「复合外键把 `shop_id` 钉死」这一关键手法：明细无法通过外键挂到别家店的单据上。订单域的收款 / 退款按 [ADR-0013](../decisions/0013-payment-and-refund-ownership.md) 与 [ADR-0016](../decisions/0016-refund-source-and-topup-reversal.md) 定义：`payments.kind` 区分销售 / 充值 / 其他，`sale` 与 `topup` 由 CHECK 约束钉死订单 / 会员的填法；`payments` 与 `refunds` 的 `shift_id` / `operator_id` 记录动作发生时的班次与操作人（只持 ID、不加外键），退款归属不继承订单。`refunds.kind` 对齐原收款（`sale`/`topup`）、`order_id` 可空、`topup` 退款填 `member_id`；退款只退实际支付部分，**券不是支付渠道**、一律进 `order_price_adjustments`，故 `payment_entries` / `refund_entries` 的 `method` CHECK 不含 `coupon`（仅 `cash`/`balance`/`card`）。
 
 ```sql
 -- +goose Up
@@ -164,6 +166,13 @@ CREATE TABLE orders (
   order_no         text        NOT NULL,
   status           text        NOT NULL DEFAULT 'draft',
   member_id        bigint      REFERENCES members(id),
+  -- 一单一卡：card_id 可空（草稿可先建后绑），提交结账前必须绑定（422 ORDER_CARD_REQUIRED，ADR-0022）
+  -- 有效绑定 := card_id IS NOT NULL AND card_released_at IS NULL；结算 / 取消时同事务置释放时间与原因，卡可复用
+  card_id            bigint,
+  card_released_at   timestamptz,
+  card_release_reason text,   -- settled / cancelled / unbound / replaced，与释放时间成对出现
+  -- 一单一房间：可空（草稿可先建后绑），提交结账前必须绑定（422 ORDER_ROOM_REQUIRED，ADR-0022）
+  room_id            bigint,
   shift_id         bigint,
   operator_id      bigint      NOT NULL,
   -- 单一币种 CNY（ADR-0004）：金额列不带 currency，不做币种校验与换算
@@ -177,14 +186,29 @@ CREATE TABLE orders (
   CONSTRAINT uq_orders_shop_no    UNIQUE (shop_id, order_no),      -- 店内唯一
   CONSTRAINT uq_orders_public_id  UNIQUE (public_id),               -- 全局唯一
   CONSTRAINT uq_orders_shop_id_id UNIQUE (shop_id, id),             -- 供复合外键引用
+  CONSTRAINT fk_orders_card       FOREIGN KEY (shop_id, card_id)
+              REFERENCES id_cards (shop_id, id),                   -- 复合外键钉死同店卡（ADR-0022）
+  CONSTRAINT fk_orders_room       FOREIGN KEY (shop_id, room_id)
+              REFERENCES rooms (shop_id, id),                      -- 复合外键钉死同店房间（ADR-0022）
   CONSTRAINT ck_orders_status     CHECK (status IN
               ('draft','open','pending_payment','paid','completed',
                'cancelled','refunded','partially_refunded')),       -- 无 refunding（ADR-0014）
+  CONSTRAINT ck_orders_card_release CHECK (
+              (card_id IS NULL AND card_released_at IS NULL AND card_release_reason IS NULL)
+              OR (card_id IS NOT NULL AND card_released_at IS NOT NULL AND card_release_reason IS NOT NULL)
+              OR (card_id IS NOT NULL AND card_released_at IS NULL AND card_release_reason IS NULL)
+  ),
   CONSTRAINT ck_orders_amounts    CHECK (total_amount >= 0 AND discount_amount >= 0)
 );
 CREATE INDEX idx_orders_shop_created ON orders (shop_id, created_at DESC)
   WHERE deleted_at IS NULL;
 CREATE INDEX idx_orders_shop_status_created ON orders (shop_id, status, created_at DESC);
+-- 一卡一活跃绑定；PostgreSQL 不允许表级 UNIQUE 带 WHERE，用 partial unique index（ADR-0022）
+-- 释放判据用 card_released_at 而非 status，取消 / 手动解绑也立即释放占用
+CREATE UNIQUE INDEX uq_orders_active_card ON orders (shop_id, card_id)
+  WHERE card_id IS NOT NULL AND card_released_at IS NULL;
+CREATE INDEX idx_orders_shop_card ON orders (shop_id, card_id);
+CREATE INDEX idx_orders_shop_room ON orders (shop_id, room_id);
 
 CREATE TABLE order_lines (
   id                   bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -204,6 +228,42 @@ CREATE TABLE order_lines (
   CONSTRAINT ck_order_lines_amount CHECK (amount >= 0)
 );
 CREATE INDEX idx_order_lines_shop_order ON order_lines (shop_id, order_id);
+
+-- 同行组：多张各自绑卡的单据组成一组共同结算（ADR-0022）；不存金额，只做编排与派生合计
+-- status: open（可合并 / 拆分）→ closed（结算完毕或成员清空）/ cancelled（无成功支付时人工放弃）
+CREATE TABLE companion_groups (
+  id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  public_id   uuid        NOT NULL DEFAULT uuidv7(),
+  shop_id     bigint      NOT NULL REFERENCES shops(id),
+  status      text        NOT NULL DEFAULT 'open',
+  version     integer     NOT NULL DEFAULT 0,
+  created_by  bigint      NOT NULL,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT uq_cg_public_id  UNIQUE (public_id),
+  CONSTRAINT uq_cg_shop_id_id UNIQUE (shop_id, id),                 -- 供复合外键引用
+  CONSTRAINT ck_cg_status CHECK (status IN ('open','closed','cancelled'))
+);
+CREATE INDEX idx_cg_shop_status ON companion_groups (shop_id, status, created_at DESC);
+
+-- 组成员：left_at 留拆出历史；一单同一时刻只属一个 open 组
+CREATE TABLE companion_group_members (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  shop_id    bigint      NOT NULL,
+  group_id   bigint      NOT NULL,
+  order_id   bigint      NOT NULL,
+  joined_at  timestamptz NOT NULL DEFAULT now(),
+  left_at    timestamptz,
+  CONSTRAINT fk_cgm_group FOREIGN KEY (shop_id, group_id)
+    REFERENCES companion_groups (shop_id, id),
+  CONSTRAINT fk_cgm_order FOREIGN KEY (shop_id, order_id)
+    REFERENCES orders (shop_id, id)
+);
+-- PostgreSQL 不允许表级 UNIQUE 带 WHERE，用 partial unique index 保证「一单一活跃组」
+CREATE UNIQUE INDEX uq_cgm_active_order ON companion_group_members (shop_id, order_id)
+  WHERE left_at IS NULL;
+CREATE INDEX idx_cgm_shop_group ON companion_group_members (shop_id, group_id)
+  WHERE left_at IS NULL;
 
 -- 收款：kind 区分销售 / 充值 / 其他（ADR-0013）；order_id 仅 sale 必填
 CREATE TABLE payments (

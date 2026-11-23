@@ -107,6 +107,18 @@
 | `CARD_HELD` | 409 | 否 | ID 卡已被他人持有（ADR-0017） |
 | `STAFF_ALREADY_HOLDS_CARD` | 409 | 否 | 该服务员已持有一张卡（ADR-0017） |
 | `CARD_IN_USE` | 409 | 否 | 持有的 ID 卡被置为失效，须先释放（ADR-0017） |
+| `CARD_NOT_HELD` | 409 | 否 | 绑定订单时该 ID 卡当前无人持有（ADR-0022） |
+| `CARD_BOUND_TO_ORDER` | 409 | 否 | 该 ID 卡已被另一张活跃订单占用（ADR-0022） |
+| `ORDER_CARD_REQUIRED` | 422 | 否 | 提交结账的订单尚未绑定有效 ID 卡（ADR-0022） |
+| `ORDER_ROOM_REQUIRED` | 422 | 否 | 提交结账的订单尚未绑定房间（ADR-0022） |
+| `ROOM_NOT_FOUND` | 404 | 否 | 订单绑定 / 更换的房间不存在（已通过门店校验，ADR-0022） |
+| `ROOM_INACTIVE` | 409 | 否 | 已停用的房间不可被新订单绑定（ADR-0022） |
+| `ROOM_IN_USE` | 409 | 否 | 房间被历史订单引用，不可删除（ADR-0022） |
+| `GROUP_NOT_FOUND` | 404 | 否 | 同行组不存在（已通过门店校验，ADR-0022） |
+| `GROUP_NOT_OPEN` | 409 | 否 | 同行组非 `open`，不可合并 / 拆分（ADR-0022） |
+| `ORDER_SETTLED` | 409 | 否 | 订单已结算 / 有成功支付，不可改分组、绑卡或绑房间（ADR-0022） |
+| `MEMBER_NOT_IN_GROUP` | 404 | 否 | 订单不是目标同行组的活跃成员（ADR-0022） |
+| `MEMBER_UNCHANGED` | 400 | 否 | 订单已属于目标组，无需重复合入（ADR-0022） |
 | `AUDIT_RETENTION_WINDOW_EXCEEDED` | 400 | 否 | 审计查询 / 导出的 `created_at_from` 早于保留窗口 cutoff；`details` 带 `earliest_queryable_at`、`retention_days`、`cutoff_at`（ADR-0008 / [08](08-audit-retention.md) §4） |
 | `SHOP_CONTEXT_REQUIRED` | 400 | 否 | 单店业务请求未显式指定当前门店（不再按可见门店数量隐式默认，ADR-0006） |
 | `UNAUTHENTICATED` | 401 | 否 | 令牌缺失/过期/无效 |
@@ -194,7 +206,7 @@
 | queue | `PUT / DELETE /api/v1/shops/{shopId}/queues/{queueId}/staff/{staffId}` | 加入（追加到队尾）/ 移出（剩余位置压缩，幂等） |
 | queue | `PUT /api/v1/shops/{shopId}/queues/{queueId}/staff/order` | 队列内全量重排：`{staff_ids, version}`，成功回传新队列详情，409 版本冲突 |
 | room（[ADR-0011](../decisions/0011-rooms-and-floors.md)） | `GET / POST /api/v1/shops/{shopId}/rooms` | 房间列表（按 `floor, code` 升序）/ 新建：`{floor, code, name}` |
-| room | `GET / PATCH / DELETE /api/v1/shops/{shopId}/rooms/{roomId}` | 房间详情 / 修改（`{floor?, code?, name?, status?, version}`，409 版本冲突）/ 删除 |
+| room | `GET / PATCH / DELETE /api/v1/shops/{shopId}/rooms/{roomId}` | 房间详情 / 修改（`{floor?, code?, name?, status?, version}`，409 版本冲突）/ 删除；被订单引用时删除返回 `409 ROOM_IN_USE`（ADR-0022） |
 | scheduling（[ADR-0012](../decisions/0012-scheduling-engine.md)） | `GET /api/v1/shops/{shopId}/scheduling/board` | 调度看板：队列 + 成员位次 + 执行者状态 |
 | scheduling | `GET / POST /api/v1/shops/{shopId}/scheduling/rules` | 判定链读取 / 发布新版本 |
 | scheduling | `GET / PUT /api/v1/shops/{shopId}/scheduling/policies` | 联动策略读取 / 发布 |
@@ -205,21 +217,32 @@
 | scheduling | `POST / DELETE /api/v1/shops/{shopId}/scheduling/pins` | 置顶 / 解除置顶（逐队列） |
 | scheduling | `POST /api/v1/shops/{shopId}/scheduling/pins/release-expired` | 到期 / 不可用自动释放 |
 | scheduling | `POST /api/v1/shops/{shopId}/scheduling/events/{eventId}/{action}` | `restore` 回原位 / `cancel` 取消 / `complete` 完成 / `assignment-method` 指派方式变更 |
-| order | `POST /api/v1/shops/{shopId}/orders` | 开单（`draft`） |
+| order | `POST /api/v1/shops/{shopId}/orders` | 开单（`draft`）；请求体可选 `{room_public_id?, card_public_id?}`（ADR-0022），校验同专属绑定端点；两者可空，提交结账前补齐 |
 | order | `POST /api/v1/shops/{shopId}/orders/price` | 实时试价（只读、不落库、无需 `Idempotency-Key`，ADR-0019；权限 `order.read`，店员可用）：请求全量 `lines[{catalog_item_id,quantity}]` + 可选 `adjustments[{type,amount,source_id?,title,description?}]`（`type` 五值见 ADR-0020，券必带 `source_id`），返回逐行快照价与折让分摊、`subtotal` / `discount_amount` / `total_amount`；服务端按 `COALESCE(本店覆盖价, 目录基础价)` 取价，与 `submit` 共用同一 `Quote` 纯函数实现所见即所得；折让 > 小计 → `422`，目录项不存在 / 数量非法 / 已下架 → `400`。详见第 10 节 |
 | order | `GET /api/v1/shops/{shopId}/orders` | 单据列表（keyset 分页） |
-| order | `GET /api/v1/shops/{shopId}/orders/{id}` | 单据详情（含明细）；金额响应含不可变 `total_amount` / `discount_amount` 与**派生** `paid_amount` / `refunded_amount` / `refundable_amount`（从 `payments` / `refunds` 的 succeeded 行聚合，不落库；已退显式过滤 `kind='sale'`，不含充值退款，ADR-0014/0016） |
+| order | `GET /api/v1/shops/{shopId}/orders/{id}` | 单据详情（含明细）；金额响应含不可变 `total_amount` / `discount_amount` 与**派生** `paid_amount` / `refunded_amount` / `refundable_amount`（从 `payments` / `refunds` 的 succeeded 行聚合，不落库；已退显式过滤 `kind='sale'`，不含充值退款，ADR-0014/0016）；上下文含 `card`（当前有效绑定，已释放为 null）/ `card_binding_history`（最近一次卡 + 释放原因）/ `room: {public_id, floor, code, name} | null`（ADR-0022） |
 | order | `POST / DELETE /api/v1/shops/{shopId}/orders/{id}/lines` | 加项 / 删项 |
-| order | `POST /api/v1/shops/{shopId}/orders/{id}/submit` | 提交结账 → `pending_payment` |
-| order | `POST /api/v1/shops/{shopId}/orders/{id}/payments` | 组合支付 → `paid` |
+| order | `POST /api/v1/shops/{shopId}/orders/{id}/submit` | 提交结账 → `pending_payment`；**前置校验：必须已绑定一张有效 ID 卡**（本店 / `active` / 未释放）与一个本店有效房间，否则 `422 ORDER_CARD_REQUIRED` / `ORDER_ROOM_REQUIRED`（ADR-0022，修订 ADR-0017「不校验开单必须持卡」与 ADR-0011「房间不与单据绑定」边界） |
+| order | `POST /api/v1/shops/{shopId}/orders/{id}/payments` | 组合支付 → `paid`；**结清时同事务自动释放卡**：订单卡绑定置 `card_released_at/reason=settled`，该卡当前持有流水置 `released_at/release_reason='order_settled'`，并写审计 / outbox；部分支付未结清不释放（ADR-0022） |
 | order | `POST /api/v1/shops/{shopId}/orders/{id}/refunds` | 销售退款（生成 `kind='sale'` 退款单）；请求体 `{amount, reason, refund_entries:[{method, amount}]}` 必须显式携带渠道明细（ADR-0014），`Σ refund_entries = amount`、单渠道累计退款 ≤ 该渠道原支付额，超限返回 `409`（由前端 / 客户协商，系统不自动分摊）；只退实际支付部分、不含券优惠；**禁止跨店退款**；退款单记**退款动作发生时**的 `shift_id` / `operator_id`，不继承原单（ADR-0013/0016） |
 | order | `POST /api/v1/shops/{shopId}/members/{id}/topups/{paymentId}/refunds` | 充值退款（生成 `kind='topup'` 退款单，权限 `member.topup.write`）；请求体同上；前置校验原收款 `kind='topup' AND status='succeeded'` 且属本店会员，**余额不足 → `409 INSUFFICIENT_BALANCE` 整笔拒绝、不做部分退**；单事务内扣回本店 `member_balances` 并写反向 `balance_ledger`，**禁止跨店**（ADR-0016） |
-| order | `POST /api/v1/shops/{shopId}/orders/{id}/cancel` | 取消未支付单据 |
+| order | `POST /api/v1/shops/{shopId}/orders/{id}/cancel` | 取消未支付单据；同事务自动释放卡（原因 `cancelled` / `order_cancelled`），避免卡被废弃单占用（ADR-0022） |
 | order | `GET /api/v1/shops/{shopId}/shifts/current` | 当前班次 |
 | order | `POST /api/v1/shops/{shopId}/shifts/open` | 开班 |
 | order | `POST /api/v1/shops/{shopId}/shifts/{id}/close` | 关班结算 |
+| order（[ADR-0022](../decisions/0022-order-card-binding-and-companion-groups.md)） | `POST /api/v1/shops/{shopId}/orders/{orderId}/card` | 绑定 / 更换 ID 卡：`{card_public_id, version}`；卡须本店 + `active` + 当前被本店人员持有，订单须未结算；对卡 `FOR UPDATE` 串行化 + 部分唯一索引兜底「一卡一活跃单」，冲突 `409 CARD_BOUND_TO_ORDER` / `CARD_NOT_HELD` |
+| order | `DELETE /api/v1/shops/{shopId}/orders/{orderId}/card` | 解绑 ID 卡：`?version=`，订单侧置 `card_released_at` + `reason=unbound`（保留 `card_id` 供追溯），**不释放人员持卡**，仅未结算单可用 |
+| order（[ADR-0022](../decisions/0022-order-card-binding-and-companion-groups.md)） | `POST /api/v1/shops/{shopId}/orders/{orderId}/room` | 绑定 / 更换房间：`{room_public_id, version}`；房间须本店 + `active`，订单须未结算；停用房间不可新绑，已绑房间停用不影响结算；不存在 `404 ROOM_NOT_FOUND`、停用 `409 ROOM_INACTIVE`（ADR-0022 §7） |
+| order | `POST /api/v1/shops/{shopId}/companion-groups` | 建同行组：`{order_public_ids?}`（可空组）；一单一卡、多单成组共同结算，权限 `order.write` |
+| order | `GET /api/v1/shops/{shopId}/companion-groups` | 同行组列表（按 `status` 筛选、keyset 分页），权限 `order.read` |
+| order | `GET /api/v1/shops/{shopId}/companion-groups/{groupId}` | 同行组详情：成员单 + 各自派生金额 + 组内只读合计 `payable_total` / `paid_total`（**不落库、不新增付款主体，付款仍逐单 `POST /orders/{id}/payments`**） |
+| order | `POST /api/v1/shops/{shopId}/companion-groups/{groupId}/members` | 合并：`{order_public_ids[], version}`；入组单须未结算，已在别组则同事务从原组移出、原组空则自动 `closed`；组 `FOR UPDATE` + 版本锁，唯一索引兜底「一单一活跃组」 |
+| order | `DELETE /api/v1/shops/{shopId}/companion-groups/{groupId}/members/{orderId}` | 拆分：`?version=`，成员 `left_at = now()` 留史，订单恢复独立，卡 / 房间绑定与金额不变 |
+| order | `POST /api/v1/shops/{shopId}/companion-groups/{groupId}/close` | 关闭组：`{version}`，要求全部活跃成员已结算或无活跃成员 |
+| order | `POST /api/v1/shops/{shopId}/companion-groups/{groupId}/cancel` | 取消组：`{version}`，要求成员无成功支付 |
+| card | `GET /api/v1/shops/{shopId}/cards` | 卡片列表（ADR-0017）响应增量 `bound_order: {public_id, order_no, status} | null`（当前有效占用该卡的订单，已释放为 null，ADR-0022） |
 
-> 收款 / 退款归属（[ADR-0013](decisions/0013-payment-and-refund-ownership.md) / [ADR-0014](decisions/0014-derived-amounts-and-refund-entries.md) / [ADR-0016](decisions/0016-refund-source-and-topup-reversal.md)）：订单支付落 `payments(kind='sale', order_id=<id>)`，会员充值落 `kind='topup'` 且不写 `order_id`；两类收款都记录本次动作的 `shift_id` / `operator_id`。退款以 `kind` 区分销售 / 充值：销售退款挂订单、充值退款挂会员，均自带退款时的班次与操作人（可与原单不同），累计退款不超过原支付额；退款请求显式带 `refund_entries` 渠道明细，系统只校验、不自动分摊，**只退实际支付部分**（券优惠进 `order_price_adjustments`、不进支付 / 退款渠道），**禁止跨店退款**，充值退款余额不足整笔拒绝。订单详情的实付 / 已退 / 可退为派生字段（从 succeeded 记录聚合，已退过滤 `kind='sale'`），订单表不存 `paid_amount`；单号日期取 `business_date`（UTC+8 + 门店切点），与日报 / 班次 / 汇总同口径。班次 / 人员维度统计从明细按需聚合，`daily_shop_summary` 粒度不变；本次不新增其他收款 / 退款专属端点。
+> 收款 / 退款归属（[ADR-0013](../decisions/0013-payment-and-refund-ownership.md) / [ADR-0014](../decisions/0014-derived-amounts-and-refund-entries.md) / [ADR-0016](../decisions/0016-refund-source-and-topup-reversal.md)）：订单支付落 `payments(kind='sale', order_id=<id>)`，会员充值落 `kind='topup'` 且不写 `order_id`；两类收款都记录本次动作的 `shift_id` / `operator_id`。退款以 `kind` 区分销售 / 充值：销售退款挂订单、充值退款挂会员，均自带退款时的班次与操作人（可与原单不同），累计退款不超过原支付额；退款请求显式带 `refund_entries` 渠道明细，系统只校验、不自动分摊，**只退实际支付部分**（券优惠进 `order_price_adjustments`、不进支付 / 退款渠道），**禁止跨店退款**，充值退款余额不足整笔拒绝。订单详情的实付 / 已退 / 可退为派生字段（从 succeeded 记录聚合，已退过滤 `kind='sale'`），订单表不存 `paid_amount`；单号日期取 `business_date`（UTC+8 + 门店切点），与日报 / 班次 / 汇总同口径。班次 / 人员维度统计从明细按需聚合，`daily_shop_summary` 粒度不变；本次不新增其他收款 / 退款专属端点。
 | inventory | `GET /api/v1/shops/{shopId}/inventory` | 库存余额 |
 | inventory | `POST /api/v1/shops/{shopId}/inventory/adjustments` | 出入库调整 |
 | inventory | `GET /api/v1/shops/{shopId}/inventory/movements` | 库存流水 |

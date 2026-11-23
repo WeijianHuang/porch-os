@@ -1,6 +1,6 @@
 # 前期系统架构详细设计 · 11 房间与楼层
 
-> 上游：[ADR-0002](../decisions/0002-go-backend-stack.md)（SQL 优先、无实体图）、[ADR-0003](../decisions/0003-shop-level-isolation.md)（只有 `shop_id` 一层隔离）、[ADR-0006](../decisions/0006-user-shops-and-current-shop.md)（当前门店请求期上下文）、[ADR-0008](../decisions/0008-design-freeze-and-nq-resolutions.md)（设计冻结）、[ADR-0011](../decisions/0011-rooms-and-floors.md)（第三次受控扩展：房间与楼层）。本册与 `00`–`10` 同为契约基线。
+> 上游：[ADR-0002](../decisions/0002-go-backend-stack.md)（SQL 优先、无实体图）、[ADR-0003](../decisions/0003-shop-level-isolation.md)（只有 `shop_id` 一层隔离）、[ADR-0006](../decisions/0006-user-shops-and-current-shop.md)（当前门店请求期上下文）、[ADR-0008](../decisions/0008-design-freeze-and-nq-resolutions.md)（设计冻结）、[ADR-0011](../decisions/0011-rooms-and-floors.md)（第三次受控扩展：房间与楼层）、[ADR-0022](../decisions/0022-order-card-binding-and-companion-groups.md)（第十四次受控扩展：订单绑定房间，修订本册「不与单据绑定」边界）。本册与 `00`–`10` 同为契约基线。
 
 ## 1. 需求与范围
 
@@ -11,12 +11,14 @@
 | 房间定义（房间号 / 名称 / 楼层 / 启停）的增删改查 | `floors` 表与楼层 CRUD |
 | 楼层作为房间整数属性（`-5..200`，可负表示地下） | 楼层自定义名称 / 平面图 / 排序权重 |
 | 列表按 `floor, code` 升序返回，前端按楼层分组 | 房间占用 / 预订 / 清洁状态机 |
-| 房间号门店内唯一、版本乐观锁、幂等写 | 房间与队列 / 服务人员 / 单据绑定 |
+| 房间与订单绑定（`orders.room_id`，ADR-0022；提交结账前必须绑定） | 按房间筛选订单 / 同房间活跃单互斥（未接受） |
+| 房间号门店内唯一、版本乐观锁、幂等写 | 房间与队列 / 服务人员绑定 |
 | 房间管理前端页面（按楼层分区的卡片） | 容纳人数 / 面积 / 设备属性、按楼层统计看板 |
 
 ## 2. 领域模型（概念层）
 
 - **Room（房间）**：B 类门店实体。字段：`public_id`、`shop_id`、`floor`（整数，`-5..200`）、`code`（房间号，店内唯一）、`name`（房间名称，非空）、`status`（`active` / `inactive`）、`version`、`created_at`、`updated_at`。
+- **Room ↔ Order（ADR-0022）**：房间 1:N 订单，**同一房间允许同时存在多张活跃订单**（多个客人同房，各自开单）；房间不参与「当前是否占用」判定，不做互斥唯一约束。客人分开买单时各单独立支付，合并买单时把多单放进同一同行组（`companion_groups`），组只做同屏结算编排。
 
 不变量（领域纯函数可脱库单测，见 `internal/domain/room`）：
 
@@ -47,6 +49,7 @@ CREATE TABLE rooms (
   version    integer     NOT NULL DEFAULT 0,
   CONSTRAINT uq_rooms_public_id UNIQUE (public_id),
   CONSTRAINT uq_rooms_shop_code UNIQUE (shop_id, code),
+  CONSTRAINT uq_rooms_shop_id_id UNIQUE (shop_id, id),  -- 迁移 00011 补，供 orders 复合外键引用（ADR-0022）
   CONSTRAINT ck_rooms_floor  CHECK (floor BETWEEN -5 AND 200),
   CONSTRAINT ck_rooms_code   CHECK (length(btrim(code)) > 0),
   CONSTRAINT ck_rooms_name   CHECK (length(btrim(name)) > 0),
@@ -56,7 +59,7 @@ CREATE INDEX idx_rooms_shop_floor_code ON rooms (shop_id, floor, code);
 ```
 
 - 读查询以 `shop_id` 前导命中索引；`ORDER BY floor ASC, code ASC` 直接命中 `idx_rooms_shop_floor_code`，无额外排序。
-- `floor` 是标量列，无外键，因此不涉及复合外键所需的 `(shop_id, id)` 引用键。
+- `floor` 是标量列，无外键；但 `orders.room_id` 通过复合外键 `(shop_id, room_id)` 引用本表（ADR-0022），因此迁移 `00011` 补 `uq_rooms_shop_id_id` 作为被引用键。
 - 不建视图、不用 RLS、不加 `tenant_id`（ADR-0002 / 0003）。
 
 ## 4. 接口契约
@@ -69,9 +72,9 @@ CREATE INDEX idx_rooms_shop_floor_code ON rooms (shop_id, floor, code);
 | `POST /api/v1/shops/{shopId}/rooms` | 新建：`{floor, code, name}` | 201 |
 | `GET /api/v1/shops/{shopId}/rooms/{roomId}` | 房间详情 | 200 / 404 |
 | `PATCH /api/v1/shops/{shopId}/rooms/{roomId}` | 修改：`{floor?, code?, name?, status?, version}` | 200 / 400 / 404 / 409 |
-| `DELETE /api/v1/shops/{shopId}/rooms/{roomId}` | 删除房间 | 204 / 404 |
+| `DELETE /api/v1/shops/{shopId}/rooms/{roomId}` | 删除房间；被订单引用时 `409 ROOM_IN_USE`（ADR-0022） | 204 / 404 / 409 |
 
-错误码复用冻结表（`design/03` §4），**不新增错误码**：越店 / 无权限 `403 PERMISSION_DENIED`、缺 `X-Shop-Id` `400 SHOP_CONTEXT_REQUIRED`、不存在 `404 NOT_FOUND`、房间号冲突 `409 CONFLICT`、楼层越界或名称空白 `400 INVALID_ARGUMENT`、版本冲突 `409 VERSION_CONFLICT`。
+错误码复用冻结表（`design/03` §4）：越店 / 无权限 `403 PERMISSION_DENIED`、缺 `X-Shop-Id` `400 SHOP_CONTEXT_REQUIRED`、不存在 `404 NOT_FOUND`、房间号冲突 `409 CONFLICT`、楼层越界或名称空白 `400 INVALID_ARGUMENT`、版本冲突 `409 VERSION_CONFLICT`；ADR-0022 新增 `409 ROOM_IN_USE`（被订单引用，不可删除）。
 
 扁平 DTO（无嵌套实体图）：
 
@@ -83,7 +86,7 @@ CREATE INDEX idx_rooms_shop_floor_code ON rooms (shop_id, floor, code);
 - 写操作走 `IdempotentWrite`（业务写入与幂等记录同事务提交，DP-07）；同幂等键重放返回首次结果。
 - 版本号 `version` 用于 `PATCH` 乐观锁：`UPDATE ... WHERE id=$1 AND shop_id=$2 AND version=$6`，影响 0 行 → `409 VERSION_CONFLICT`。
 - 唯一约束 `(shop_id, code)` 捕获房间号重复 → `409 CONFLICT`；`floor` 越界 / 空白字段由领域纯函数前置校验 → `400 INVALID_ARGUMENT`。
-- 删除房间无级联依赖（本期不与其它表关联），单条 `DELETE ... WHERE id AND shop_id`。
+- 删除房间：无业务级联（不自动解绑订单）；`orders.room_id` 外键 `RESTRICT`，存在引用时 `DELETE ... WHERE id AND shop_id` 触发 FK 约束错误（SQLSTATE 23503）→ `409 ROOM_IN_USE`（ADR-0022）。
 
 ## 6. 关键流程
 

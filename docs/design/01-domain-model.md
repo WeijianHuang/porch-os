@@ -19,10 +19,11 @@
 | `shop` | `Shop` | `ShopSettings`、`BusinessDay` | A 全局 | `Shop.id` 即 `shop_id`；不设 `ShopGroup`，门店之间无分组 / 层级关系（ADR-0005） |
 | `catalog` | `CatalogItem` | `Category`、`ShopCatalogOverride` | A 全局 + B 覆盖 | 目录全局唯一；价格/上下架按店覆盖，覆盖记录带 `shop_id` |
 | `member` | `Member` | `MemberBalance`、`BalanceLedger` | A 档案 + B 账 | 档案按手机号全局唯一；余额与流水按店独立 |
-| `order` | `Order` | `OrderLine`、`PriceAdjustment` | B | 单据与所有明细同属一个 `shop_id`；金额恒等于明细合计减调整。`PriceAdjustment` 的原因已结构化（ADR-0020）：`type` 五值（`coupon` / `promotion` / `rounding` / `manual` / `other`）+ `title`（账单短标题、必填）+ `description`（详细原因、可选）；券以 `source_id` 只持 ID 预留追溯（无外键，券表未建） |
+| `order` | `Order` | `OrderLine`、`PriceAdjustment` | B | 单据与所有明细同属一个 `shop_id`；每张单还绑定至多一张 ID 卡与一个房间（ADR-0022，均为可空 ID，提交结账前必须齐备）；金额恒等于明细合计减调整。`PriceAdjustment` 的原因已结构化（ADR-0020）：`type` 五值（`coupon` / `promotion` / `rounding` / `manual` / `other`）+ `title`（账单短标题、必填）+ `description`（详细原因、可选）；券以 `source_id` 只持 ID 预留追溯（无外键，券表未建） |
 | `order` | `Payment` | `PaymentEntry`（组合支付的一笔） | B | 「收款」是独立聚合根，按 `kind`（`sale` / `topup` / `other`）区分来源；`sale` 必挂订单、可多次尝试（`failed` 终态、重试新行留审计链）、组合支付逐渠道记录且合计等于收款额；`topup` 必挂会员且不挂订单（ADR-0013）；`method` 只记**真实资金渠道**（`cash` / `balance` / `card`），券不是支付、一律进 `order_price_adjustments`（ADR-0016） |
 | `order` | `Refund` | `RefundEntry`（退款的一笔渠道明细） | B | 退款以 `kind`（`sale` / `topup`）区分来源、必等于原收款的 `kind`；`sale` 挂订单、`topup` 挂会员（`member_id`）；引用已成功的支付且不修改原单，累计退款 ≤ 原支付；退款自带 `shift_id` / `operator_id`（退款动作的班次与操作人，不继承订单），常跨班次发生；退款请求显式携带 `refund_entries`（渠道 + 金额）且只退实际支付部分，系统只校验渠道合法性与「单渠道累计退款 ≤ 该渠道原支付额」，不自动分摊、不决定超额处理；**禁止跨店退款、充值余额不足整笔拒绝**（ADR-0013 / 0014 / 0016） |
 | `order` | `Shift` | — | B | 一个门店同一时刻最多一个 `open` 班次（数据库部分唯一索引保证） |
+| `order`（[ADR-0022](../decisions/0022-order-card-binding-and-companion-groups.md)） | `CompanionGroup` | `CompanionGroupMember`（成员，`left_at` 留拆出史） | B | 同行组 = 多张各自绑卡的单据组成的一组共同结算；**一单同一时刻至多属一个 `open` 组**（部分唯一）；`status` = `open`/`closed`/`cancelled`（后两者终态）。组**不是付款主体、不存金额**：付款仍逐单走 `Payment`，组内应付 / 已付合计为只读派生。合并 / 拆分只动分组归属，不改订单的卡 / 房间绑定、明细、金额 |
 | `inventory` | `InventoryBalance` | `StockMovement`、`StockTransfer` | B | 余额 = 流水累计；不允许负库存（除非门店显式开启允许） |
 | `reporting` | `DailyShopSummary` | `ExportJob` | B / 派生 | 汇总可重算，重算结果与源流水一致 |
 | `platform` | `IdempotencyKey` | `OutboxEvent` | 基础设施 | 幂等键在作用域内唯一；Outbox 事件与业务写入同事务 |
@@ -53,6 +54,8 @@
 | `id` / `public_id` | 内部主键 / 对外标识 | 分开；`public_id` 用时间有序 UUID |
 | `shop_id` | 归属门店 | 创建后不可变 |
 | `order_no` | 人类可读单号 | **店内唯一**，由数据库唯一约束保证 |
+| `card_id` | 绑定的 ID 卡（可空，草稿可先建后绑；ADR-0022） | 只持 ID、复合外键锁同店；**一单一卡**，有效绑定判据 `card_released_at IS NULL`（部分唯一）；结算 / 取消时同事务置 `card_released_at` 与 `card_release_reason`（`settled`/`cancelled`/`unbound`/`replaced`），并释放该卡当前持卡流水（`release_reason='order_settled'`/`'order_cancelled'`）；**提交结账前必须已绑定有效卡**，否则 `422 ORDER_CARD_REQUIRED`。与 `card_holdings` 的「人持卡」是两个独立维度 |
+| `room_id` | 绑定的房间（可空，草稿可先建后绑；ADR-0022） | 只持 ID、复合外键 `(shop_id, room_id)` 锁同店；一房间可关联多张单，不做房间互斥；绑定时房间须 `active`，已绑房间停用不影响结算；**提交结账前必须已绑定房间**，否则 `422 ORDER_ROOM_REQUIRED`；详情展示当前房间 `floor/code/name`，不落快照 |
 | `status` | 状态机取值 | 见第 5 节 |
 | `shift_id` / `operator_id` | 班次 / 操作人 | 只持 ID |
 | `member_id` | 关联会员（可空） | 只持 ID，不嵌会员对象 |
