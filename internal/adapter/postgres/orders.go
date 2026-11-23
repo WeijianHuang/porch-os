@@ -20,25 +20,26 @@ import (
 // projection carries its lines but no entity graph, and derived amounts are
 // computed from immutable records on read, never persisted (ADR-0014).
 type Order struct {
-	PublicID         string            `json:"public_id"`
-	OrderNo          string            `json:"order_no"`
-	Status           string            `json:"status"`
-	MemberID         *string           `json:"member_id"`
-	ShiftID          *string           `json:"shift_id"`
-	OperatorID       int64             `json:"operator_id"`
-	TotalAmount      string            `json:"total_amount"`
-	DiscountAmount   string            `json:"discount_amount"`
-	Version          int               `json:"version"`
-	CreatedAt        time.Time         `json:"created_at"`
-	UpdatedAt        time.Time         `json:"updated_at"`
-	Card             *OrderCardRef     `json:"card"`
-	CardBinding      *OrderCardBinding `json:"card_binding_history,omitempty"`
-	Room             *OrderRoomRef     `json:"room"`
-	ID               int64             `json:"-"`
-	Lines            []OrderLine       `json:"lines,omitempty"`
-	PaidAmount       string            `json:"paid_amount,omitempty"`
-	RefundedAmount   string            `json:"refunded_amount,omitempty"`
-	RefundableAmount string            `json:"refundable_amount,omitempty"`
+	PublicID         string                  `json:"public_id"`
+	OrderNo          string                  `json:"order_no"`
+	Status           string                  `json:"status"`
+	MemberID         *string                 `json:"member_id"`
+	ShiftID          *string                 `json:"shift_id"`
+	OperatorID       int64                   `json:"operator_id"`
+	TotalAmount      string                  `json:"total_amount"`
+	DiscountAmount   string                  `json:"discount_amount"`
+	Version          int                     `json:"version"`
+	CreatedAt        time.Time               `json:"created_at"`
+	UpdatedAt        time.Time               `json:"updated_at"`
+	Card             *OrderCardRef           `json:"card"`
+	CardBinding      *OrderCardBinding       `json:"card_binding_history,omitempty"`
+	Room             *OrderRoomRef           `json:"room"`
+	CompanionGroup   *OrderCompanionGroupRef `json:"companion_group,omitempty"`
+	ID               int64                   `json:"-"`
+	Lines            []OrderLine             `json:"lines,omitempty"`
+	PaidAmount       string                  `json:"paid_amount,omitempty"`
+	RefundedAmount   string                  `json:"refunded_amount,omitempty"`
+	RefundableAmount string                  `json:"refundable_amount,omitempty"`
 }
 
 // OrderCardRef is the active card binding projection. A released binding is
@@ -63,6 +64,15 @@ type OrderRoomRef struct {
 	Floor    int    `json:"floor"`
 	Code     string `json:"code"`
 	Name     string `json:"name"`
+}
+
+// OrderCompanionGroupRef is the order-side view of group membership (ADR-0022
+// §5). Group detail only answers "which orders are in this group", so checkout
+// needs the reverse direction to render the order's own context. A single
+// value, not a slice: uq_cgm_active_order allows one active group per order.
+type OrderCompanionGroupRef struct {
+	PublicID string `json:"public_id"`
+	Status   string `json:"status"`
 }
 
 type OrderLine struct {
@@ -90,7 +100,13 @@ const orderCols = `public_id::text, order_no, status,
   (SELECT public_id::text FROM rooms WHERE rooms.id=orders.room_id),
   (SELECT floor FROM rooms WHERE rooms.id=orders.room_id),
   (SELECT code FROM rooms WHERE rooms.id=orders.room_id),
-  (SELECT name FROM rooms WHERE rooms.id=orders.room_id)`
+  (SELECT name FROM rooms WHERE rooms.id=orders.room_id),
+  (SELECT g.public_id::text FROM companion_group_members m
+     JOIN companion_groups g ON g.id=m.group_id AND g.shop_id=m.shop_id
+    WHERE m.shop_id=orders.shop_id AND m.order_id=orders.id AND m.left_at IS NULL),
+  (SELECT g.status FROM companion_group_members m
+     JOIN companion_groups g ON g.id=m.group_id AND g.shop_id=m.shop_id
+    WHERE m.shop_id=orders.shop_id AND m.order_id=orders.id AND m.left_at IS NULL)`
 
 func scanOrder(row pgx.Row) (Order, error) {
 	var v Order
@@ -100,10 +116,11 @@ func scanOrder(row pgx.Row) (Order, error) {
 	var cardPub, cardCode, cardName sql.NullString
 	var roomPub, roomCode, roomName sql.NullString
 	var roomFloor sql.NullInt64
+	var groupPub, groupStatus sql.NullString
 	err := row.Scan(&v.PublicID, &v.OrderNo, &v.Status, &member, &shift, &v.OperatorID,
 		&v.TotalAmount, &v.DiscountAmount, &v.Version, &v.CreatedAt, &v.UpdatedAt, &v.ID,
 		&releasedAt, &releaseReason, &cardPub, &cardCode, &cardName,
-		&roomPub, &roomFloor, &roomCode, &roomName)
+		&roomPub, &roomFloor, &roomCode, &roomName, &groupPub, &groupStatus)
 	if err != nil {
 		return v, err
 	}
@@ -134,6 +151,10 @@ func scanOrder(row pgx.Row) (Order, error) {
 			Code:     roomCode.String,
 			Name:     roomName.String,
 		}
+	}
+	// A left/closed membership never projects: the order is standalone again.
+	if groupPub.Valid {
+		v.CompanionGroup = &OrderCompanionGroupRef{PublicID: groupPub.String, Status: groupStatus.String}
 	}
 	v.CreatedAt, v.UpdatedAt = utc(v.CreatedAt), utc(v.UpdatedAt)
 	return v, nil

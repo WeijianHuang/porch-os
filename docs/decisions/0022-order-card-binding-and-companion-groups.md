@@ -180,6 +180,7 @@ CREATE INDEX idx_cgm_shop_group ON companion_group_members (shop_id, group_id)
 - **合入（合并）**：对目标组 `SELECT ... FOR UPDATE` + `version` 乐观锁；每个入组单必须未结算且属本店。若该单已在另一个 `open` 组，同事务把原成员行置 `left_at = now()`；原组因此无活跃成员时同事务置 `closed`。已与本组关联的活跃单返回 `400 MEMBER_UNCHANGED`。
 - **拆出（拆分）**：把成员行置 `left_at = now()`，订单恢复独立；**不改 `orders.card_id` / `room_id`、明细、金额**；组无活跃成员时同事务置 `closed`。
 - **并发**：组级写串行化依赖 `FOR UPDATE` + `version`，`uq_cgm_active_order` 兜底「一单只属一组」。
+- **订单侧反向投影**：订单详情（`GET /orders/{id}`）额外返回 `companion_group: {public_id, status} | null`，即该单当前活跃成员关系（`left_at IS NULL`）所属的组；组状态可能是 `open` / `closed` / `cancelled`，故必须带 `status` 由调用方判断可操作性。由 `uq_cgm_active_order` 保证至多一条，故是单值而非数组。该字段只读、不落 `orders` 列、不新增端点；没有它，收银端无法从一张单反查所在组（组详情只覆盖「组 → 单」方向）。拆出（`left_at` 非空）后返回 `null`，订单恢复独立。组变更后详情需重读，不做缓存推送。
 - 所有写端点要求 `Idempotency-Key`（design/03 §6），写 `audit_logs` 与 `outbox_events`，与业务写同事务。
 
 ### 6. 金额与结算口径（不新增付款主体）
@@ -214,7 +215,7 @@ CREATE INDEX idx_cgm_shop_group ON companion_group_members (shop_id, group_id)
 
 - `EXPECTED_SCHEMA_VERSION` 升 11；迁移须验证 `up → down-to 10 → up` 无残留。现有订单 `card_id` / `room_id` 全为 NULL，无需回填；但**旧单在未绑卡 / 未绑房间前无法提交或付款**（校验对存量草稿同样生效），需在发布说明中提示。
 - 提交结账新增两个 422 分支：`porch-console` 的无卡 / 无房间草稿必须先补齐；试价端点（ADR-0019）仍不校验，保持只读。
-- `GET /cards` 响应新增 `bound_order`（可空）；订单详情新增 `card` / `card_binding_history` / `room`，前端需容忍旧后端缺这些字段。
+- `GET /cards` 响应新增 `bound_order`（可空）；订单详情新增 `card` / `card_binding_history` / `room` / `companion_group`，前端需容忍旧后端缺这些字段。
 - 自动释放使 ADR-0017 的「失效不自动释放、释放不改生效状态」仍成立，但**「释放只能人工调用」被修订**：结算 / 取消是新的自动释放来源，释放原因可区分。卡的 `status='active'/'inactive'` 不受自动释放影响。
 - ADR-0011「房间不与单据绑定」被修订：房间可新增「被订单引用」关系，删除房间需先确认无引用（409 `ROOM_IN_USE`）；不引入房间占用 / 预订状态机。**同一房间可同时挂多张活跃订单**（多个客人同房），房间列表 / 详情不提供「当前是否占用」的判断；若后续要做房间占用视图，须基于 `orders` 实时派生，不新增占用状态列。
 - 组详情 `payable_total` 是只读派生；并发付款时读到的合计可能瞬时滞后，前端须以逐单付款响应为准刷新。
