@@ -131,10 +131,10 @@ cmd/porch-os/       早期零依赖引导程序（/health），CI 基线保留
 internal/           app 装配 · adapter/http 接口 · adapter/postgres 数据访问 · domain 领域 · platform 配置与错误 · security 令牌
 docs/               架构原则、详细设计、本地环境、决策记录
   ARCHITECTURE.md   隔离模型、分层、技术栈落地与稳健性原则
-  design/           前期详细设计 00–14（总览 / 领域 / 数据库 / 接口 / 应用架构 / 横切 / 流程 / 部署 / 审计 / 跨店差额 / 队列与服务人员 / 房间与楼层 / 多队列调度规则引擎 / 服务人员状态控制 / ID 卡与方形服务格子）
+  design/           前期详细设计 00–15（总览 / 领域 / 数据库 / 接口 / 应用架构 / 横切 / 流程 / 部署 / 审计 / 跨店差额 / 队列与服务人员 / 房间与楼层 / 多队列调度规则引擎 / 服务人员状态控制 / ID 卡与方形服务格子 / 服务类目录项时长）
   LOCAL-DEV.md      本地 PostgreSQL 启动、验证与重置
-  decisions/        ADR：0001 数据库、0002 后端技术栈、0003 仅门店层隔离、0004 范围基线、0005 取消门店组、0006 用户-门店关系与切换、0007 剩余开放问题决议、0008 设计冻结与运行基线、0009 队列与服务人员、0010 在岗状态与队列顺序、0011 房间与楼层、0012 多队列调度规则引擎
-migrations/         goose 迁移：0001 初始化 schema、0002 RBAC 基线、0003 队列与服务人员、0004 队列服务人员权限、0005 在岗状态与队列顺序、0006 房间与楼层、0007 多队列调度规则引擎
+  decisions/        ADR：0001 数据库、0002 后端技术栈、0003 仅门店层隔离、0004 范围基线、0005 取消门店组、0006 用户-门店关系与切换、0007 剩余开放问题决议、0008 设计冻结与运行基线、0009 队列与服务人员、0010 在岗状态与队列顺序、0011 房间与楼层、0012 多队列调度规则引擎、0013 收款与退款归属、0014 金额派生与退款渠道、0015 服务人员状态控制、0016 充值退款与券口径、0017 ID 卡、0018 服务时长
+migrations/         goose 迁移：0001 初始化 schema、0002 RBAC 基线、0003 队列与服务人员、0004 队列服务人员权限、0005 在岗状态与队列顺序、0006 房间与楼层、0007 多队列调度规则引擎、0008 ID 卡、0009 服务时长、0010 R3 订单域
 go.mod              Go 模块定义（go 1.25；已引入 Gin / pgx / goose 等首批依赖）
 docker-compose.yml  本地数据库（PostgreSQL 18.7）
 .env.example        配置占位（仅示例值）
@@ -188,7 +188,10 @@ nor `worker` runs migrations at startup.
 | `docs/decisions/0010-duty-status-and-queue-order.md` | 服务人员在岗状态与队列内顺序（第二次受控扩展，schema 版本 5） |
 | `docs/decisions/0011-rooms-and-floors.md` | 房间与楼层（第三次受控扩展，schema 版本 6） |
 | `docs/decisions/0012-scheduling-engine.md` | 多队列调度规则引擎深度整合（第四次受控扩展，复用 staff 作为执行者，schema 版本 7） |
+| `docs/decisions/0013-payment-and-refund-ownership.md` | 收款 `kind` 与归属、支付 / 退款动作班次与操作人（第五次受控扩展，R3 契约修正，落地于 schema 10） |
+| `docs/decisions/0014-derived-amounts-and-refund-entries.md` | 删除 `paid_amount` / `refunding`、金额派生与逐渠道退款明细（第六次受控扩展，R3 契约修正，落地于 schema 10） |
 | `docs/decisions/0015-staff-state-and-position-controls.md` | 服务人员状态、停止轮转与位次人工控制（第七次受控扩展，无 schema 变更） |
+| `docs/decisions/0016-refund-source-and-topup-reversal.md` | 充值退款锚点、余额不足整笔拒绝、禁止跨店退款、券归折扣（第八次受控扩展，R3 契约修正，落地于 schema 10） |
 | `docs/decisions/0017-id-cards-and-square-slots.md` | 店内 ID 卡与方形服务格子（第九次受控扩展，schema 版本 8） |
 | `docs/decisions/0018-service-duration.md` | 服务类目录项时长 `duration_minutes` 与幂等种子（第十次受控扩展，schema 版本 9） |
 | `docs/decisions/0019-order-price-preview.md` | 订单实时试价端点 `orders/price` 与统一计价函数（第十一次受控扩展）；订单域落地于 `00010_orders.sql`，schema 版本 10，契约另见 ADR-0013 / 0014 / 0016 |
@@ -203,7 +206,7 @@ nor `worker` runs migrations at startup.
 - **R0** 工程约定、架构原则、社区文件、数据库 / 后端技术栈 / 隔离模型 / 范围基线 / 取消门店组 / 用户-门店关系与切换 / 剩余开放问题决议 ADR、可编译引导骨架、真实 CI 与**前期系统架构详细设计**（OQ / NQ 全部关闭、DP-01–07 已接受，**详细设计已冻结**，R1 范围与验收标准已定 — ADR-0008）
 - **R1** 领域模型 + `shop_id` 单层隔离 + 单店 CRUD + 集成测试基线
 - **R2** 多店汇总（按显式门店集合）、门店可见范围授权、跨店会员
-- **R3** 开单收银、幂等与单号生成、报表流式导出
+- **R3** 开单收银、幂等与单号生成、报表流式导出（**订单域后端已落地**：班次 / 订单 / 支付 / 退款 / 充值退款，迁移 `00010`、schema 版本 10；报表流式导出与前端页面待续）
 - **R4** 实时能力、可观测性、生产加固清单
 
 ## 配套仓库

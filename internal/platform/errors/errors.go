@@ -49,7 +49,7 @@ func mapCode(code string) (int, bool) {
 		return http.StatusForbidden, false
 	case "NOT_FOUND", "SNAPSHOT_MISSING", "EVENT_NOT_FOUND", "TASK_TYPE_NOT_FOUND", "CARD_NOT_FOUND", "STAFF_NOT_FOUND":
 		return http.StatusNotFound, false
-	case "EXECUTOR_BUSY", "CARD_HELD", "STAFF_ALREADY_HOLDS_CARD", "CARD_IN_USE":
+	case "EXECUTOR_BUSY", "CARD_HELD", "STAFF_ALREADY_HOLDS_CARD", "CARD_IN_USE", "INSUFFICIENT_BALANCE":
 		return http.StatusConflict, false
 	case "NO_PRIMARY_QUEUE", "INVALID_STATE", "EXECUTOR_NOT_FOUND", "SITE_NOT_FOUND", "QUEUE_NOT_FOUND", "AUDIT_ACTOR_MISSING":
 		return http.StatusBadRequest, false

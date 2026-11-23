@@ -652,23 +652,57 @@ func (h *Handler) Topup(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Amount string `json:"amount"`
+		Amount  string               `json:"amount"`
+		Entries []postgres.PayMethod `json:"entries"`
 	}
 	if err := decode(c, &req); err != nil {
 		badRequest(c, err)
 		return
 	}
 	amount, err := money.FromString(req.Amount)
-	if err != nil || amount.String() == "0.00" || amount.IsNegative() {
+	if err != nil || !amount.IsPositive() {
 		badRequest(c, errors.New("amount must be positive"))
 		return
 	}
+	// A topup records the real funding channel so a later topup refund can
+	// validate per-channel capacity. Default to cash when the client omits it.
+	entries := req.Entries
+	if len(entries) == 0 {
+		entries = []postgres.PayMethod{{Method: "cash", Amount: amount.String()}}
+	}
+	entrySum := money.Zero()
+	for _, e := range entries {
+		if e.Method != "cash" && e.Method != "balance" && e.Method != "card" {
+			badRequest(c, errors.New("invalid payment method"))
+			return
+		}
+		m, err := money.FromString(e.Amount)
+		if err != nil || !m.IsPositive() {
+			badRequest(c, errors.New("invalid entry amount"))
+			return
+		}
+		entrySum = entrySum.Add(m)
+	}
+	if entrySum.String() != amount.String() {
+		badRequest(c, errors.New("entries must sum to amount"))
+		return
+	}
 	shopID := Current(c).ShopID
+	p := Current(c)
+	shift := h.currentShiftID(c, shopID)
 	h.runWrite(c, func(tx pgx.Tx) (int, any, error) {
-		after, err := h.Store.Topup(c.Request.Context(), tx, shopID, id, amount.String())
+		// ADR-0013 / 0016: a topup is a payment with kind='topup', no order_id,
+		// written in the same transaction as the balance credit. That payment
+		// is the anchor for the member-scoped topup refund endpoint.
+		payment, err := h.Store.TopupPayment(c.Request.Context(), tx, shopID, id, p.UserID,
+			amount.String(), p.IdemKey, shift, entries)
 		if err != nil {
 			return 0, nil, pgErr(err)
 		}
-		return 201, h.envelope(c, gin.H{"balance": after}, nil), nil
+		after, _, err := h.Store.Balance(c.Request.Context(), tx, shopID, id)
+		if err != nil {
+			return 0, nil, pgErr(err)
+		}
+		return 201, h.envelope(c, gin.H{"balance": after, "payment": payment}, nil), nil
 	})
 }

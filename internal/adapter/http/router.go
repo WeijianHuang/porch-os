@@ -138,6 +138,24 @@ func NewRouter(store *postgres.Store, cfg config.Config) *gin.Engine {
 			one.POST("/scheduling/events/:eventId/cancel", h.schedulingEventAction("cancel"))
 			one.POST("/scheduling/events/:eventId/complete", h.schedulingEventAction("complete"))
 			one.POST("/scheduling/events/:eventId/assignment-method", h.schedulingEventAction("assignment-method"))
+
+			// Orders / payments / refunds / shifts (ADR-0013 / 0014 / 0016,
+			// design/03 §8). Every path is shop-scoped; writes are idempotent.
+			one.POST("/orders", h.CreateOrder)
+			one.GET("/orders", h.ListOrders)
+			one.GET("/orders/:id", h.GetOrder)
+			one.POST("/orders/:id/lines", h.AddOrderLine)
+			one.DELETE("/orders/:id/lines", h.RemoveOrderLine)
+			one.POST("/orders/:id/submit", h.SubmitOrder)
+			one.POST("/orders/:id/payments", h.PayOrder)
+			one.POST("/orders/:id/refunds", h.SaleRefund)
+			one.POST("/orders/:id/cancel", h.CancelOrder)
+			// Topup refund is member-scoped and uses member.topup.write.
+			one.POST("/members/:id/topups/:paymentId/refunds", h.RefundTopup)
+
+			one.GET("/shifts/current", h.CurrentShift)
+			one.POST("/shifts/open", h.OpenShift)
+			one.POST("/shifts/:id/close", h.CloseShift)
 		}
 	}
 	return r

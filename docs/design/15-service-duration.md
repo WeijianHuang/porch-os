@@ -61,7 +61,7 @@ CHECK 是最终防线：即使绕过 API 直连数据库写入非法组合也会
 
 ## 5. 验收
 
-1. 迁移可上可下，`EXPECTED_SCHEMA_VERSION=9` 时 `/ready` 200。
+1. 迁移可上可下，本扩展落地时 `EXPECTED_SCHEMA_VERSION=9` 且 `/ready` 200；其后 R3 订单域迁移 `00010` 把版本升为 10，当前以 `EXPECTED_SCHEMA_VERSION=10` 校验。
 2. 非法「类型 + 时长」组合被 CHECK 与 API 双重拒绝。
 3. 目录页服务项显示「N 分钟」，商品项显示「—」。
 4. `seed-demo` 连跑两次数据量不变；两种看板卡片持卡名称来自种子卡，剩余分钟仍为「—」。

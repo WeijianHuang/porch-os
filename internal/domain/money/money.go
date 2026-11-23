@@ -32,6 +32,8 @@ func FromDecimal(d decimal.Decimal) Money {
 func (m Money) Decimal() decimal.Decimal { return m.amount }
 func (m Money) String() string           { return m.amount.StringFixed(2) }
 func (m Money) IsNegative() bool         { return m.amount.IsNegative() }
+func (m Money) IsPositive() bool         { return m.amount.IsPositive() }
+func (m Money) IsZero() bool             { return m.amount.IsZero() }
 func (m Money) Add(o Money) Money        { return FromDecimal(m.amount.Add(o.amount)) }
 func (m Money) Sub(o Money) Money        { return FromDecimal(m.amount.Sub(o.amount)) }
 

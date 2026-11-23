@@ -144,7 +144,12 @@ R0 引导骨架仅用标准库提供 `/health`，零外部依赖，作为 CI 基
 - [0010 · 服务人员在岗状态与队列内顺序（第二次受控扩展）](decisions/0010-duty-status-and-queue-order.md)
 - [0011 · 房间与楼层（第三次受控扩展）](decisions/0011-rooms-and-floors.md)
 - [0012 · 多队列调度规则引擎（第四次受控扩展，深度数据整合）](decisions/0012-scheduling-engine.md)
+- [0013 · 收款 `kind` 与支付 / 退款归属（第五次受控扩展，R3 契约修正，落地于 schema 10）](decisions/0013-payment-and-refund-ownership.md)
+- [0014 · 金额派生模型与逐渠道退款明细（第六次受控扩展，R3 契约修正，落地于 schema 10）](decisions/0014-derived-amounts-and-refund-entries.md)
 - [0015 · 服务人员状态、轮转与位次人工控制（第七次受控扩展，无 schema 变更）](decisions/0015-staff-state-and-position-controls.md)
+- [0016 · 充值退款锚点、余额不足整笔拒绝、券归折扣（第八次受控扩展，R3 契约修正，落地于 schema 10）](decisions/0016-refund-source-and-topup-reversal.md)
+- [0017 · 店内 ID 卡与方形服务格子（第九次受控扩展，迁移 `00008`，schema 8）](decisions/0017-id-cards-and-square-slots.md)
+- [0018 · 服务类目录项时长与幂等种子（第十次受控扩展，迁移 `00009`，schema 9）](decisions/0018-service-duration.md)
 
 后续选型在 `docs/decisions/` 下按 `NNNN-标题.md` 递增记录，模板：
 
@@ -162,7 +167,7 @@ R0 引导骨架仅用标准库提供 `/health`，零外部依赖，作为 CI 基
 
 ## 10. 详细设计
 
-前期系统架构详细设计在 [`design/00-overview.md`](design/00-overview.md)，**已冻结**（ADR-0008），共 13 册：
+前期系统架构详细设计在 [`design/00-overview.md`](design/00-overview.md)，**已冻结**（ADR-0008），共 16 册（`00`–`15`，其中 `10`–`15` 为冻结后的受控扩展分册）：
 
 | 册 | 内容 |
 |---|---|
@@ -182,5 +187,7 @@ R0 引导骨架仅用标准库提供 `/health`，零外部依赖，作为 CI 基
 | [13 服务人员状态控制](design/13-staff-controls.md) | 8 个展示状态桶、6 个可人工设置状态、停止轮转、队列内移动位次、留位复用置顶（ADR-0015 扩展，无 schema 变更） |
 | [14 ID 卡与方形服务格子](design/14-id-cards-and-square-slots.md) | 店内 ID 卡（多人先后持有、同一时刻一人一卡、生效失效）、看板持卡投影、剩余分钟预留、正方形格子（ADR-0017 扩展，迁移 `00008`） |
 | [15 服务类目录项时长](design/15-service-duration.md) | `catalog_items.duration_minutes`（服务 1..1440 分钟、商品 `null`）、目录端点增量、`cmd/job seed-demo` 幂等种子（ADR-0018 扩展，迁移 `00009`） |
+
+**落地状态**：R3 订单域后端已按 ADR-0013 / 0014 / 0016 与 `01` / `02` / `03` / `06` 落地（迁移 `00010`，schema 版本 10，`EXPECTED_SCHEMA_VERSION=10`）——班次 / 订单 / 明细 / 价格调整 / 支付 / 支付渠道明细 / 退款 / 退款渠道明细 8 张表，13 个单店端点，权限 `order.read` / `order.write` / `member.topup.write`；报表流式导出与前端订单页面待续。本次为实现落地，未新增 ADR、未改动设计口径。
 
 该套文档**已由 [ADR-0008](decisions/0008-design-freeze-and-nq-resolutions.md) 冻结**，以本文与 `docs/decisions/` 下已接受的 ADR 为上游约束。**OQ-01–08、NQ-01–16 与 DP-01–07 全部关闭**（`00` 第 8 节）。冻结后，任何改动 schema、唯一性范围、隔离条件、状态机、错误语义、端点清单，或 `07`–`09` 中固定的副本数 / 连接池 / 保留天数 / 清理窗口基线的 PR，必须**先改设计或 ADR 再改代码**并同步对应分册；只改实现、不改契约的 PR 不需要改设计文档。

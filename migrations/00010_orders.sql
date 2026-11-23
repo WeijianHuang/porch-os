@@ -244,12 +244,17 @@ CREATE INDEX idx_refund_entries_shop_refund ON refund_entries (shop_id, refund_i
 -- Cashier shift. Partial unique index: at most one open shift per shop.
 CREATE TABLE shifts (
   id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  -- External identifier for POST /shifts/{id}/close, consistent with the
+  -- public_id convention (design/02 §1). Kept in the still-uncommitted first
+  -- migration: no business data exists yet, so no回填 is needed.
+  public_id   uuid        NOT NULL DEFAULT uuidv7(),
   shop_id     bigint      NOT NULL REFERENCES shops(id),
   shift_no    text        NOT NULL,
   status      text        NOT NULL DEFAULT 'open',
   opened_at   timestamptz NOT NULL DEFAULT now(),
   closed_at   timestamptz,
   CONSTRAINT uq_shifts_shop_no UNIQUE (shop_id, shift_no),
+  CONSTRAINT uq_shifts_public_id UNIQUE (public_id),
   CONSTRAINT ck_shifts_status  CHECK (status IN ('open','closing','closed'))
 );
 CREATE UNIQUE INDEX uq_shifts_one_open_per_shop ON shifts (shop_id) WHERE status = 'open';

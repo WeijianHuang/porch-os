@@ -55,7 +55,7 @@
 | scheduling | `scheduling_events` | B | 派单事件与决策摘要（幂等锚点） | `(shop_id, public_id)` |
 | scheduling | `scheduling_snapshots` | B | 一次事件的各队列位次前后快照 | `(shop_id, event_id)` |
 | member | `member_visits` | B | 到店记录 | `(shop_id, public_id)` |
-| order | `shifts` | B | 收银班次 | `(shop_id, shift_no)`；部分唯一：一店最多一个 `open` |
+| order | `shifts` | B | 收银班次（`public_id` 供 `/shifts/{id}/close` 对外使用，迁移 `00010`） | `(shop_id, shift_no)` / `public_id`；部分唯一：一店最多一个 `open` |
 | order | `orders` | B | 单据 | **`(shop_id, order_no)` 店内唯一** |
 | order | `order_lines` | B | 单据明细（价格快照） | `(shop_id, order_id, line_no)` |
 | order | `order_price_adjustments` | B | 整单让利（`type` 区分券 / 活动 / 抹零 / 手工 / 其他；`title` 账单短标题、`description` 详细原因；券以 `source_id` 预留追溯锚点，ADR-0020；已分摊到行）。**专属于 Order 聚合**：`order_id NOT NULL` + 复合外键钉死订单与同店，无其他业务使用者；充值赠送走 `balance_ledger`，非同构让利另立新表，禁止改成多态关联（见 ADR-0020「表的适用边界」） | `(shop_id, order_id, seq)` |
@@ -341,12 +341,14 @@ CREATE INDEX idx_refund_entries_shop_refund ON refund_entries (shop_id, refund_i
 
 CREATE TABLE shifts (
   id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  public_id   uuid        NOT NULL DEFAULT uuidv7(),   -- 对外 ID：/shifts/{id}/close 用 public_id，与其余实体一致（落地于迁移 00010）
   shop_id     bigint      NOT NULL REFERENCES shops(id),
   shift_no    text        NOT NULL,
   status      text        NOT NULL DEFAULT 'open',
   opened_at   timestamptz NOT NULL DEFAULT now(),
   closed_at   timestamptz,
-  CONSTRAINT uq_shifts_shop_no UNIQUE (shop_id, shift_no)
+  CONSTRAINT uq_shifts_shop_no UNIQUE (shop_id, shift_no),
+  CONSTRAINT uq_shifts_public_id UNIQUE (public_id)
 );
 -- 部分唯一索引：一家店同时最多只有一个 open 班次
 CREATE UNIQUE INDEX uq_shifts_one_open_per_shop ON shifts (shop_id) WHERE status = 'open';
