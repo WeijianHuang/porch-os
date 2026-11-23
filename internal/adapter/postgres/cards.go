@@ -23,9 +23,18 @@ type CardRef struct {
 // Card is the full shop-local card row plus its current holder, if any.
 type Card struct {
 	CardRef
-	Status  string      `json:"status"`
-	Version int         `json:"version"`
-	Holder  *CardHolder `json:"holder"`
+	Status     string          `json:"status"`
+	Version    int             `json:"version"`
+	Holder     *CardHolder     `json:"holder"`
+	BoundOrder *CardBoundOrder `json:"bound_order"`
+}
+
+// CardBoundOrder is the active order currently occupying a card (ADR-0022).
+// Released bindings are excluded, so a settled order never shows here.
+type CardBoundOrder struct {
+	PublicID string `json:"public_id"`
+	OrderNo  string `json:"order_no"`
+	Status   string `json:"status"`
 }
 
 type CardHolder struct {
@@ -82,12 +91,43 @@ func (s *Store) ListCards(ctx context.Context, q DBTX, shopID int64) ([]Card, er
 	if err != nil {
 		return nil, err
 	}
+	bound, err := cardBoundOrders(ctx, q, shopID)
+	if err != nil {
+		return nil, err
+	}
 	for i := range out {
 		if h, ok := holders[out[i].PublicID]; ok {
 			out[i].Holder = &h
 		}
+		if b, ok := bound[out[i].PublicID]; ok {
+			out[i].BoundOrder = &b
+		}
 	}
 	return out, nil
+}
+
+// cardBoundOrders folds active order occupancy into a map keyed by card
+// public id. One card has at most one active binding (partial unique index).
+func cardBoundOrders(ctx context.Context, q DBTX, shopID int64) (map[string]CardBoundOrder, error) {
+	rows, err := q.Query(ctx, `
+		SELECT c.public_id::text, o.public_id::text, o.order_no, o.status
+		FROM orders o
+		JOIN id_cards c ON c.id=o.card_id AND c.shop_id=o.shop_id
+		WHERE o.shop_id=$1 AND o.card_released_at IS NULL AND o.deleted_at IS NULL`, shopID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]CardBoundOrder)
+	for rows.Next() {
+		var cardPub string
+		var b CardBoundOrder
+		if err := rows.Scan(&cardPub, &b.PublicID, &b.OrderNo, &b.Status); err != nil {
+			return nil, err
+		}
+		out[cardPub] = b
+	}
+	return out, rows.Err()
 }
 
 // cardHoldersByID folds current holdings into a map keyed by card public id.

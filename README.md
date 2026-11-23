@@ -134,7 +134,7 @@ docs/               架构原则、详细设计、本地环境、决策记录
   design/           前期详细设计 00–15（总览 / 领域 / 数据库 / 接口 / 应用架构 / 横切 / 流程 / 部署 / 审计 / 跨店差额 / 队列与服务人员 / 房间与楼层 / 多队列调度规则引擎 / 服务人员状态控制 / ID 卡与方形服务格子 / 服务类目录项时长）
   LOCAL-DEV.md      本地 PostgreSQL 启动、验证与重置
   decisions/        ADR：0001 数据库、0002 后端技术栈、0003 仅门店层隔离、0004 范围基线、0005 取消门店组、0006 用户-门店关系与切换、0007 剩余开放问题决议、0008 设计冻结与运行基线、0009 队列与服务人员、0010 在岗状态与队列顺序、0011 房间与楼层、0012 多队列调度规则引擎、0013 收款与退款归属、0014 金额派生与退款渠道、0015 服务人员状态控制、0016 充值退款与券口径、0017 ID 卡、0018 服务时长
-migrations/         goose 迁移：0001 初始化 schema、0002 RBAC 基线、0003 队列与服务人员、0004 队列服务人员权限、0005 在岗状态与队列顺序、0006 房间与楼层、0007 多队列调度规则引擎、0008 ID 卡、0009 服务时长、0010 R3 订单域
+migrations/         goose 迁移：0001 初始化 schema、0002 RBAC 基线、0003 队列与服务人员、0004 队列服务人员权限、0005 在岗状态与队列顺序、0006 房间与楼层、0007 多队列调度规则引擎、0008 ID 卡、0009 服务时长、0010 R3 订单域、0011 订单卡 / 房间与同行组
 go.mod              Go 模块定义（go 1.25；已引入 Gin / pgx / goose 等首批依赖）
 docker-compose.yml  本地数据库（PostgreSQL 18.7）
 .env.example        配置占位（仅示例值）
@@ -149,7 +149,7 @@ CHANGELOG.md        变更记录
 Prerequisites: Go 1.25+ (matching `go.mod`) and a running PostgreSQL 18.7 (`docker compose up -d db`).
 
 ```bash
-cp .env.example .env          # set DATABASE_URL / JWT_SECRET / EXPECTED_SCHEMA_VERSION=10
+cp .env.example .env          # set DATABASE_URL / JWT_SECRET / EXPECTED_SCHEMA_VERSION=11
 go run ./cmd/job migrate      # the ONLY process allowed to change the schema
 SEED_LOGIN=admin SEED_PASSWORD=<local-password> go run ./cmd/job seed-user
 go run ./cmd/api              # /health and /ready on PORT (default 8080)

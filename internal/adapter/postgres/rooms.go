@@ -2,21 +2,24 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/Masterminds/squirrel"
+	apierrors "github.com/WeijianHuang/porch-os/internal/platform/errors"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Room is a flat shop-scoped DTO: no embedded entity graph (ADR-0002 / ADR-0011).
 // Floor is a scalar column; there is no floors table or floor_id.
 type Room struct {
-	PublicID  string `json:"public_id"`
-	Floor     int    `json:"floor"`
-	Code      string `json:"code"`
-	Name      string `json:"name"`
-	Status    string `json:"status"`
-	Version   int    `json:"version"`
+	PublicID  string    `json:"public_id"`
+	Floor     int       `json:"floor"`
+	Code      string    `json:"code"`
+	Name      string    `json:"name"`
+	Status    string    `json:"status"`
+	Version   int       `json:"version"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	ID        int64     `json:"-"`
@@ -96,6 +99,18 @@ func (s *Store) UpdateRoom(
 }
 
 func (s *Store) DeleteRoom(ctx context.Context, tx pgx.Tx, shopID, id int64) error {
-	_, err := tx.Exec(ctx, `DELETE FROM rooms WHERE id=$1 AND shop_id=$2`, id, shopID)
-	return err
+	tag, err := tx.Exec(ctx, `DELETE FROM rooms WHERE id=$1 AND shop_id=$2`, id, shopID)
+	if err != nil {
+		// A room referenced by historical orders cannot be deleted: the FK is
+		// RESTRICT by design, so surface a business conflict (ADR-0022).
+		var pg *pgconn.PgError
+		if errors.As(err, &pg) && pg.Code == "23503" {
+			return apierrors.New("ROOM_IN_USE", "房间已被订单引用，不能删除")
+		}
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return apierrors.NotFound
+	}
+	return nil
 }

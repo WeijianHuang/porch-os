@@ -153,6 +153,20 @@ func NewRouter(store *postgres.Store, cfg config.Config) *gin.Engine {
 			one.POST("/orders/:id/payments", h.PayOrder)
 			one.POST("/orders/:id/refunds", h.SaleRefund)
 			one.POST("/orders/:id/cancel", h.CancelOrder)
+			// Order context bindings (ADR-0022): one active card + one room.
+			// Both are mandatory at submit and released on settlement/cancel.
+			one.POST("/orders/:id/card", h.BindOrderCard)
+			one.DELETE("/orders/:id/card", h.UnbindOrderCard)
+			one.POST("/orders/:id/room", h.BindOrderRoom)
+			// Companion groups (ADR-0022): multi-order shared checkout. The
+			// group stores no money; payments remain per order.
+			one.POST("/companion-groups", h.CreateCompanionGroup)
+			one.GET("/companion-groups", h.ListCompanionGroups)
+			one.GET("/companion-groups/:groupId", h.GetCompanionGroup)
+			one.POST("/companion-groups/:groupId/members", h.JoinCompanionGroup)
+			one.DELETE("/companion-groups/:groupId/members/:orderId", h.LeaveCompanionGroup)
+			one.POST("/companion-groups/:groupId/close", h.CloseCompanionGroup)
+			one.POST("/companion-groups/:groupId/cancel", h.CancelCompanionGroup)
 			// Topup refund is member-scoped and uses member.topup.write.
 			one.POST("/members/:id/topups/:paymentId/refunds", h.RefundTopup)
 

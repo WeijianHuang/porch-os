@@ -41,15 +41,19 @@ func WithDetails(e *APIError, details ...Detail) *APIError {
 
 func mapCode(code string) (int, bool) {
 	switch code {
-	case "INVALID_ARGUMENT", "STATE_UNCHANGED", "SHOP_CONTEXT_REQUIRED", "AUDIT_RETENTION_WINDOW_EXCEEDED", "CARD_INACTIVE":
+	case "INVALID_ARGUMENT", "STATE_UNCHANGED", "SHOP_CONTEXT_REQUIRED", "AUDIT_RETENTION_WINDOW_EXCEEDED",
+		"CARD_INACTIVE", "MEMBER_UNCHANGED":
 		return http.StatusBadRequest, false
 	case "UNAUTHENTICATED":
 		return http.StatusUnauthorized, false
 	case "PERMISSION_DENIED":
 		return http.StatusForbidden, false
-	case "NOT_FOUND", "SNAPSHOT_MISSING", "EVENT_NOT_FOUND", "TASK_TYPE_NOT_FOUND", "CARD_NOT_FOUND", "STAFF_NOT_FOUND":
+	case "NOT_FOUND", "SNAPSHOT_MISSING", "EVENT_NOT_FOUND", "TASK_TYPE_NOT_FOUND", "CARD_NOT_FOUND",
+		"STAFF_NOT_FOUND", "ROOM_NOT_FOUND", "GROUP_NOT_FOUND", "MEMBER_NOT_IN_GROUP":
 		return http.StatusNotFound, false
-	case "EXECUTOR_BUSY", "CARD_HELD", "STAFF_ALREADY_HOLDS_CARD", "CARD_IN_USE", "INSUFFICIENT_BALANCE":
+	case "EXECUTOR_BUSY", "CARD_HELD", "STAFF_ALREADY_HOLDS_CARD", "CARD_IN_USE", "INSUFFICIENT_BALANCE",
+		"CARD_NOT_HELD", "CARD_BOUND_TO_ORDER", "ROOM_INACTIVE", "ROOM_IN_USE",
+		"GROUP_NOT_OPEN", "ORDER_SETTLED":
 		return http.StatusConflict, false
 	case "NO_PRIMARY_QUEUE", "INVALID_STATE", "EXECUTOR_NOT_FOUND", "SITE_NOT_FOUND", "QUEUE_NOT_FOUND", "AUDIT_ACTOR_MISSING":
 		return http.StatusBadRequest, false
@@ -57,7 +61,7 @@ func mapCode(code string) (int, bool) {
 		return http.StatusConflict, code == "IDEMPOTENCY_IN_PROGRESS" || code == "VERSION_CONFLICT"
 	case "PRECONDITION_FAILED":
 		return http.StatusPreconditionFailed, false
-	case "UNPROCESSABLE":
+	case "UNPROCESSABLE", "ORDER_CARD_REQUIRED", "ORDER_ROOM_REQUIRED":
 		return http.StatusUnprocessableEntity, false
 	case "RATE_LIMITED":
 		return http.StatusTooManyRequests, true

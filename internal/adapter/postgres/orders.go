@@ -20,22 +20,49 @@ import (
 // projection carries its lines but no entity graph, and derived amounts are
 // computed from immutable records on read, never persisted (ADR-0014).
 type Order struct {
-	PublicID         string      `json:"public_id"`
-	OrderNo          string      `json:"order_no"`
-	Status           string      `json:"status"`
-	MemberID         *string     `json:"member_id"`
-	ShiftID          *string     `json:"shift_id"`
-	OperatorID       int64       `json:"operator_id"`
-	TotalAmount      string      `json:"total_amount"`
-	DiscountAmount   string      `json:"discount_amount"`
-	Version          int         `json:"version"`
-	CreatedAt        time.Time   `json:"created_at"`
-	UpdatedAt        time.Time   `json:"updated_at"`
-	ID               int64       `json:"-"`
-	Lines            []OrderLine `json:"lines,omitempty"`
-	PaidAmount       string      `json:"paid_amount,omitempty"`
-	RefundedAmount   string      `json:"refunded_amount,omitempty"`
-	RefundableAmount string      `json:"refundable_amount,omitempty"`
+	PublicID         string            `json:"public_id"`
+	OrderNo          string            `json:"order_no"`
+	Status           string            `json:"status"`
+	MemberID         *string           `json:"member_id"`
+	ShiftID          *string           `json:"shift_id"`
+	OperatorID       int64             `json:"operator_id"`
+	TotalAmount      string            `json:"total_amount"`
+	DiscountAmount   string            `json:"discount_amount"`
+	Version          int               `json:"version"`
+	CreatedAt        time.Time         `json:"created_at"`
+	UpdatedAt        time.Time         `json:"updated_at"`
+	Card             *OrderCardRef     `json:"card"`
+	CardBinding      *OrderCardBinding `json:"card_binding_history,omitempty"`
+	Room             *OrderRoomRef     `json:"room"`
+	ID               int64             `json:"-"`
+	Lines            []OrderLine       `json:"lines,omitempty"`
+	PaidAmount       string            `json:"paid_amount,omitempty"`
+	RefundedAmount   string            `json:"refunded_amount,omitempty"`
+	RefundableAmount string            `json:"refundable_amount,omitempty"`
+}
+
+// OrderCardRef is the active card binding projection. A released binding is
+// returned as Card=nil plus CardBinding, so callers never mistake a historical
+// card for a currently held one (ADR-0022 §1).
+type OrderCardRef struct {
+	PublicID string `json:"public_id"`
+	Code     string `json:"code"`
+	Name     string `json:"name"`
+}
+
+type OrderCardBinding struct {
+	Card       OrderCardRef `json:"card"`
+	ReleasedAt time.Time    `json:"released_at"`
+	Reason     string       `json:"reason"`
+}
+
+// OrderRoomRef is read from the current rooms row; ADR-0022 deliberately does
+// not snapshot room code/name on the order.
+type OrderRoomRef struct {
+	PublicID string `json:"public_id"`
+	Floor    int    `json:"floor"`
+	Code     string `json:"code"`
+	Name     string `json:"name"`
 }
 
 type OrderLine struct {
@@ -55,21 +82,61 @@ func (v Order) GetCursor() (time.Time, int64) { return v.CreatedAt, v.ID }
 const orderCols = `public_id::text, order_no, status,
   (SELECT public_id::text FROM members WHERE members.id=orders.member_id),
   (SELECT public_id::text FROM shifts WHERE shifts.id=orders.shift_id),
-  operator_id, total_amount::text, discount_amount::text, version, created_at, updated_at, id`
+  operator_id, total_amount::text, discount_amount::text, version, created_at, updated_at, id,
+  card_released_at, card_release_reason,
+  (SELECT public_id::text FROM id_cards WHERE id_cards.id=orders.card_id),
+  (SELECT code FROM id_cards WHERE id_cards.id=orders.card_id),
+  (SELECT name FROM id_cards WHERE id_cards.id=orders.card_id),
+  (SELECT public_id::text FROM rooms WHERE rooms.id=orders.room_id),
+  (SELECT floor FROM rooms WHERE rooms.id=orders.room_id),
+  (SELECT code FROM rooms WHERE rooms.id=orders.room_id),
+  (SELECT name FROM rooms WHERE rooms.id=orders.room_id)`
 
 func scanOrder(row pgx.Row) (Order, error) {
 	var v Order
 	var member, shift sql.NullString
+	var releasedAt sql.NullTime
+	var releaseReason sql.NullString
+	var cardPub, cardCode, cardName sql.NullString
+	var roomPub, roomCode, roomName sql.NullString
+	var roomFloor sql.NullInt64
 	err := row.Scan(&v.PublicID, &v.OrderNo, &v.Status, &member, &shift, &v.OperatorID,
-		&v.TotalAmount, &v.DiscountAmount, &v.Version, &v.CreatedAt, &v.UpdatedAt, &v.ID)
+		&v.TotalAmount, &v.DiscountAmount, &v.Version, &v.CreatedAt, &v.UpdatedAt, &v.ID,
+		&releasedAt, &releaseReason, &cardPub, &cardCode, &cardName,
+		&roomPub, &roomFloor, &roomCode, &roomName)
+	if err != nil {
+		return v, err
+	}
 	if member.Valid {
 		v.MemberID = &member.String
 	}
 	if shift.Valid {
 		v.ShiftID = &shift.String
 	}
+	// cardId is non-null whenever cardPub is; a released binding is projected
+	// as history only, so a settled order never advertises a usable card.
+	if cardPub.Valid {
+		ref := OrderCardRef{PublicID: cardPub.String, Code: cardCode.String, Name: cardName.String}
+		if releasedAt.Valid {
+			v.CardBinding = &OrderCardBinding{
+				Card:       ref,
+				ReleasedAt: utc(releasedAt.Time),
+				Reason:     releaseReason.String,
+			}
+		} else {
+			v.Card = &ref
+		}
+	}
+	if roomPub.Valid {
+		v.Room = &OrderRoomRef{
+			PublicID: roomPub.String,
+			Floor:    int(roomFloor.Int64),
+			Code:     roomCode.String,
+			Name:     roomName.String,
+		}
+	}
 	v.CreatedAt, v.UpdatedAt = utc(v.CreatedAt), utc(v.UpdatedAt)
-	return v, err
+	return v, nil
 }
 
 var (
@@ -430,6 +497,10 @@ func (s *Store) SubmitOrder(ctx context.Context, tx pgx.Tx, shopID, operatorID i
 	if version != v.Version {
 		return v, errVersion
 	}
+	// ADR-0022: submit requires an active card binding and a bound room.
+	if err := submitContextCheck(ctx, tx, shopID, v.ID); err != nil {
+		return v, err
+	}
 	// Read line snapshots for pricing (source of truth, never client totals).
 	rows, err := tx.Query(ctx, `
 		SELECT line_no, amount::text FROM order_lines
@@ -540,6 +611,10 @@ func (s *Store) CancelOrder(ctx context.Context, tx pgx.Tx, shopID, operatorID i
 	}
 	if tag.RowsAffected() == 0 {
 		return v, errVersion
+	}
+	// Cancelling an unpaid order must not leave the card locked (ADR-0022).
+	if err := releaseOrderCard(ctx, tx, shopID, operatorID, v.ID, v.PublicID, "cancelled"); err != nil {
+		return v, err
 	}
 	if err := appendOrderAudit(ctx, tx, shopID, operatorID, "order_cancelled", v.PublicID, nil); err != nil {
 		return v, err

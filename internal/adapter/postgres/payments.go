@@ -180,6 +180,11 @@ func (s *Store) PayOrder(ctx context.Context, tx pgx.Tx, shopID, operatorID int6
 	if tag.RowsAffected() == 0 {
 		return out, order, errVersion
 	}
+	// ADR-0022: settlement releases both the order-side card binding and the
+	// staff holding in the same transaction. No-op when no card was bound.
+	if err := releaseOrderCard(ctx, tx, shopID, operatorID, order.ID, order.PublicID, "settled"); err != nil {
+		return out, order, err
+	}
 
 	if err := appendOrderAudit(ctx, tx, shopID, operatorID, "order_paid", order.PublicID, nil); err != nil {
 		return out, order, err

@@ -82,7 +82,9 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 		return
 	}
 	var req struct {
-		MemberID *string `json:"member_id"`
+		MemberID     *string `json:"member_id"`
+		RoomPublicID string  `json:"room_public_id"`
+		CardPublicID string  `json:"card_public_id"`
 	}
 	if err := decode(c, &req); err != nil {
 		badRequest(c, err)
@@ -112,6 +114,22 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 		v, err := h.Store.CreateOrder(c.Request.Context(), tx, p.ShopID, p.UserID, memberID, shiftID)
 		if err != nil {
 			return 0, nil, pgErr(err)
+		}
+		// Optional context at create time (ADR-0022); both remain editable
+		// until submit. Failures roll the whole order back.
+		if req.RoomPublicID != "" {
+			v, err = h.Store.BindOrderRoom(c.Request.Context(), tx, p.ShopID, p.UserID,
+				v.PublicID, req.RoomPublicID, v.Version)
+			if err != nil {
+				return 0, nil, pgErr(err)
+			}
+		}
+		if req.CardPublicID != "" {
+			v, err = h.Store.BindOrderCard(c.Request.Context(), tx, p.ShopID, p.UserID,
+				v.PublicID, req.CardPublicID, v.Version)
+			if err != nil {
+				return 0, nil, pgErr(err)
+			}
 		}
 		return 201, h.envelope(c, v, nil), nil
 	})
