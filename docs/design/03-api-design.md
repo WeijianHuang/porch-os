@@ -117,6 +117,8 @@
 | `GROUP_NOT_FOUND` | 404 | 否 | 同行组不存在（已通过门店校验，ADR-0022） |
 | `GROUP_NOT_OPEN` | 409 | 否 | 同行组非 `open`，不可合并 / 拆分（ADR-0022） |
 | `ORDER_SETTLED` | 409 | 否 | 订单已结算 / 有成功支付，不可改分组、绑卡或绑房间（ADR-0022） |
+| `GROUP_HAS_UNSETTLED_MEMBERS` | 409 | 否 | 关组时仍有未结清的活跃成员，须先逐单结清或拆出（ADR-0022） |
+| `GROUP_HAS_PAID_MEMBERS` | 409 | 否 | 取消组时已有成员产生成功支付，只能关闭、不能取消（ADR-0022） |
 | `MEMBER_NOT_IN_GROUP` | 404 | 否 | 订单不是目标同行组的活跃成员（ADR-0022） |
 | `MEMBER_UNCHANGED` | 400 | 否 | 订单已属于目标组，无需重复合入（ADR-0022） |
 | `AUDIT_RETENTION_WINDOW_EXCEEDED` | 400 | 否 | 审计查询 / 导出的 `created_at_from` 早于保留窗口 cutoff；`details` 带 `earliest_queryable_at`、`retention_days`、`cutoff_at`（ADR-0008 / [08](08-audit-retention.md) §4） |

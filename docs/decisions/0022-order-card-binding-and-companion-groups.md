@@ -194,7 +194,8 @@ CREATE INDEX idx_cgm_shop_group ON companion_group_members (shop_id, group_id)
 
 ### 7. 错误码（复用 + 新增）
 
-新增：`CARD_NOT_HELD`（409，卡当前无人持有）、`CARD_BOUND_TO_ORDER`（409，卡已被另一活跃订单占用）、`ORDER_CARD_REQUIRED`（422）、`ORDER_ROOM_REQUIRED`（422）、`ROOM_NOT_FOUND`（404）、`ROOM_INACTIVE`（409）、`ROOM_IN_USE`（409，删除被订单引用的房间）、`GROUP_NOT_FOUND`（404）、`GROUP_NOT_OPEN`（409）、`ORDER_SETTLED`（409，已结算单不可改分组 / 卡 / 房间）、`MEMBER_NOT_IN_GROUP`（404）、`MEMBER_UNCHANGED`（400）。
+新增：`CARD_NOT_HELD`（409，卡当前无人持有）、`CARD_BOUND_TO_ORDER`（409，卡已被另一活跃订单占用）、`ORDER_CARD_REQUIRED`（422）、`ORDER_ROOM_REQUIRED`（422）、`ROOM_NOT_FOUND`（404）、`ROOM_INACTIVE`（409）、`ROOM_IN_USE`（409，删除被订单引用的房间）、`GROUP_NOT_FOUND`（404）、`GROUP_NOT_OPEN`（409）、`GROUP_HAS_UNSETTLED_MEMBERS`（409，关组时仍有未结清成员）、`GROUP_HAS_PAID_MEMBERS`（409，取消组时已有成功支付）、`ORDER_SETTLED`（409，已结算单不可改分组 / 卡 / 房间）、`MEMBER_NOT_IN_GROUP`（404）、`MEMBER_UNCHANGED`（400）。
+组级拒绝不复用 `ORDER_SETTLED`：关组被拒的实际原因是「有成员未结清」，取消被拒是「已有成功支付」，两者都不是某张单已结算，混用会让收银端显示误导性提示（如把草稿单的关组失败说成「订单已结算」）。
 复用：`CARD_NOT_FOUND` / `CARD_INACTIVE`（ADR-0017）、`NOT_FOUND`（ADR-0011 房间不存在时按端点语义映射到 `ROOM_NOT_FOUND`）、`VERSION_CONFLICT`（409）、`SHOP_CONTEXT_REQUIRED`（400）、`PERMISSION_DENIED`（403）。一律不静默改现场状态。
 
 ### 8. 审计与事件

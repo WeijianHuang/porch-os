@@ -18,6 +18,8 @@ import (
 var (
 	errGroupNotFound    = apierrors.New("GROUP_NOT_FOUND", "同行组不存在")
 	errGroupNotOpen     = apierrors.New("GROUP_NOT_OPEN", "同行组当前不可修改")
+	errGroupUnsettled   = apierrors.New("GROUP_HAS_UNSETTLED_MEMBERS", "组内仍有未结清订单，不能关闭")
+	errGroupHasPaid     = apierrors.New("GROUP_HAS_PAID_MEMBERS", "组内已有成功支付，只能关闭、不能取消")
 	errMemberNotInGroup = apierrors.New("MEMBER_NOT_IN_GROUP", "订单不是该同行组的活跃成员")
 	errMemberUnchanged  = apierrors.New("MEMBER_UNCHANGED", "订单已在该同行组中")
 )
@@ -362,7 +364,9 @@ func (s *Store) CloseCompanionGroup(ctx context.Context, tx pgx.Tx, shopID, acto
 		if err == companion.ErrNotOpen {
 			return CompanionGroup{}, errGroupNotOpen
 		}
-		return CompanionGroup{}, errOrderSettled
+		// Group-level refusal: some member is unsettled. Reporting ORDER_SETTLED
+		// here would tell the cashier the opposite of what happened.
+		return CompanionGroup{}, errGroupUnsettled
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE companion_groups SET status='closed', version=version+1, updated_at=now()
@@ -404,7 +408,7 @@ func (s *Store) CancelCompanionGroup(ctx context.Context, tx pgx.Tx, shopID, act
 		if err == companion.ErrNotOpen {
 			return CompanionGroup{}, errGroupNotOpen
 		}
-		return CompanionGroup{}, errOrderSettled
+		return CompanionGroup{}, errGroupHasPaid
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE companion_groups SET status='cancelled', version=version+1, updated_at=now()
