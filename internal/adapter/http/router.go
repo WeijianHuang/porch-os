@@ -142,6 +142,9 @@ func NewRouter(store *postgres.Store, cfg config.Config) *gin.Engine {
 			// Orders / payments / refunds / shifts (ADR-0013 / 0014 / 0016,
 			// design/03 §8). Every path is shop-scoped; writes are idempotent.
 			one.POST("/orders", h.CreateOrder)
+			// Read-only preview (ADR-0019): must precede /orders/:id routes so
+			// gin does not capture "price" as an :id parameter.
+			one.POST("/orders/price", h.PreviewOrderPrice)
 			one.GET("/orders", h.ListOrders)
 			one.GET("/orders/:id", h.GetOrder)
 			one.POST("/orders/:id/lines", h.AddOrderLine)

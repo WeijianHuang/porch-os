@@ -5,12 +5,52 @@ import (
 	"strconv"
 
 	"github.com/WeijianHuang/porch-os/internal/adapter/postgres"
+	"github.com/WeijianHuang/porch-os/internal/domain/money"
 	apierrors "github.com/WeijianHuang/porch-os/internal/platform/errors"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
 )
 
-// ---------- orders (ADR-0013 / 0014 / 0016, design/03 §8) ----------
+// ---------- orders (ADR-0013 / 0014 / 0016 / 0019 / 0020, design/03 §8/§10) ----------
+
+// PreviewOrderPrice is the read-only price quote of ADR-0019: full cart +
+// structured adjustments in, per-line allocated amounts out. No database
+// write, no order number, no idempotency key (middleware exempts this path).
+func (h *Handler) PreviewOrderPrice(c *gin.Context) {
+	if !hasPerm(Current(c), "order.read") {
+		fail(c, apierrors.PermissionDenied)
+		return
+	}
+	var req struct {
+		Lines       []postgres.PriceLineInput `json:"lines"`
+		Adjustments []postgres.Adjustment     `json:"adjustments"`
+	}
+	// The idempotency middleware skips this read-only POST, so it does not
+	// pre-read the body into Principal; bind directly from the request.
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.Lines) == 0 {
+		badRequest(c, errors.New("lines are required"))
+		return
+	}
+	amounts := make([]money.Money, 0, len(req.Adjustments))
+	for _, a := range req.Adjustments {
+		if err := postgres.ValidateAdjustment(a); err != nil {
+			fail(c, err)
+			return
+		}
+		m, err := money.FromString(a.Amount)
+		if err != nil || m.IsNegative() {
+			badRequest(c, errors.New("adjustment amount must be non-negative"))
+			return
+		}
+		amounts = append(amounts, m)
+	}
+	result, err := h.Store.PricePreview(c.Request.Context(), Current(c).ShopID, req.Lines, amounts)
+	if err != nil {
+		fail(c, pgErr(err))
+		return
+	}
+	ok(c, 200, result, nil)
+}
 
 func (h *Handler) orderID(c *gin.Context, shopID int64) (postgres.Order, bool) {
 	v, err := h.Store.OrderByPublic(c.Request.Context(), nil, shopID, c.Param("id"))

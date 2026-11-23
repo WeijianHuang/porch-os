@@ -145,3 +145,41 @@ func TestLineAmountAndDerive(t *testing.T) {
 		t.Fatal("refundable must floor at zero")
 	}
 }
+
+func TestQuoteMergedAdjustmentAllocation(t *testing.T) {
+	lines := []QuoteLine{
+		{LineNo: 1, Amount: mustMoney(t, "60.00")},
+		{LineNo: 2, Amount: mustMoney(t, "40.00")},
+	}
+	// Two adjustments must be MERGED before one allocation (ADR-0019 §2).
+	q, err := Quote(lines, []money.Money{mustMoney(t, "5.00"), mustMoney(t, "5.00")})
+	if err != nil {
+		t.Fatalf("quote: %v", err)
+	}
+	if q.Subtotal.String() != "100.00" || q.DiscountAmount.String() != "10.00" || q.TotalAmount.String() != "90.00" {
+		t.Fatalf("totals = %+v", q)
+	}
+	sum := money.Zero()
+	for _, l := range q.Lines {
+		sum = sum.Add(l.AllocatedAdjustment)
+		if l.LineTotal.String() != l.Amount.Sub(l.AllocatedAdjustment).String() {
+			t.Fatalf("line_total mismatch: %+v", l)
+		}
+	}
+	if sum.String() != "10.00" {
+		t.Fatalf("allocated sum = %s", sum.String())
+	}
+	if q.Lines[0].AllocatedAdjustment.String() != "6.00" || q.Lines[1].AllocatedAdjustment.String() != "4.00" {
+		t.Fatalf("weight allocation wrong: %+v", q.Lines)
+	}
+}
+
+func TestQuoteRejectsOverDiscountAndEmpty(t *testing.T) {
+	lines := []QuoteLine{{LineNo: 1, Amount: mustMoney(t, "10.00")}}
+	if _, err := Quote(lines, []money.Money{mustMoney(t, "10.01")}); err == nil {
+		t.Fatal("discount over subtotal must fail")
+	}
+	if _, err := Quote(nil, nil); err == nil {
+		t.Fatal("empty cart must fail")
+	}
+}

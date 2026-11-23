@@ -131,11 +131,18 @@ func ShopScope() gin.HandlerFunc {
 // ID happens only after visibility has passed, preventing ID enumeration.
 var shopIDByPublicID func(c *gin.Context, userID int64, publicID string) (int64, error)
 
+// isReadOnlyPricePath exempts the single read-only POST /orders/price endpoint
+// (ADR-0019 §3) from Idempotency-Key. The full path ends in /orders/price; the
+// exemption must never be widened to any writing endpoint.
+func isReadOnlyPricePath(c *gin.Context) bool {
+	return c.Request.Method == http.MethodPost && strings.HasSuffix(c.Request.URL.Path, "/orders/price")
+}
+
 // Idempotency enforces the header on all writes and captures the request body
 // so a handler can bind it and the fingerprint can be computed once.
 func Idempotency() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead {
+		if c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead || isReadOnlyPricePath(c) {
 			c.Next()
 			return
 		}

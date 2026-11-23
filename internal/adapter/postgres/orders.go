@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Masterminds/squirrel"
@@ -72,6 +74,80 @@ var (
 	errConflict      = apierrors.New("CONFLICT", "业务规则冲突")
 	errInsufficient  = apierrors.New("INSUFFICIENT_BALANCE", "余额不足，整笔拒绝")
 )
+
+// PriceLineInput is one full-cart line of a preview request (ADR-0019 §2).
+// catalog_item_id is the item's public_id; the client never supplies a price.
+type PriceLineInput struct {
+	CatalogItemID string `json:"catalog_item_id"`
+	Quantity      string `json:"quantity"`
+}
+
+// PricePreview is the read-only quote shared with submit. It resolves each
+// item's effective price from the shop override (整价替换) or base price,
+// rejects unavailable items, and allocates merged adjustments to lines.
+// Nothing is written: no order, no number, no transaction, no idempotency.
+func (s *Store) PricePreview(ctx context.Context, shopID int64, in []PriceLineInput, adjustments []money.Money) (domorder.QuoteResult, error) {
+	var result domorder.QuoteResult
+	if len(in) == 0 {
+		return result, apierrors.InvalidArgument
+	}
+	qlines := make([]domorder.QuoteLine, 0, len(in))
+	meta := make([]domorder.QuoteLineResult, 0, len(in))
+	for i, l := range in {
+		if l.CatalogItemID == "" {
+			return result, apierrors.InvalidArgument
+		}
+		qty, err := decimal.NewFromString(l.Quantity)
+		if err != nil || !qty.IsPositive() {
+			return result, apierrors.InvalidArgument
+		}
+		// Effective price and availability: an override row wins over the
+		// global base price / active flag (ADR-0019 §2). One query per line,
+		// no N+1 into other aggregates, and no write of any kind.
+		var price, name string
+		var available bool
+		err = s.Pool.QueryRow(ctx, `
+			SELECT c.name, COALESCE(o.price, c.base_price)::text,
+			       COALESCE(o.available, c.active)
+			FROM catalog_items c
+			LEFT JOIN shop_catalog_overrides o
+			  ON o.catalog_item_id=c.id AND o.shop_id=$1
+			WHERE c.public_id=$2::uuid`, shopID, l.CatalogItemID).
+			Scan(&name, &price, &available)
+		if err != nil {
+			return result, err
+		}
+		if !available {
+			return result, apierrors.WithDetails(apierrors.InvalidArgument,
+				apierrors.Detail{Field: "lines[" + strconv.Itoa(i) + "]", Reason: "item_unavailable"})
+		}
+		unit, err := money.FromString(price)
+		if err != nil {
+			return result, err
+		}
+		amount, err := domorder.LineAmount(unit, qty)
+		if err != nil {
+			return result, apierrors.InvalidArgument
+		}
+		qlines = append(qlines, domorder.QuoteLine{LineNo: i + 1, Amount: amount})
+		meta = append(meta, domorder.QuoteLineResult{
+			LineNo:           i + 1,
+			CatalogItemID:    l.CatalogItemID,
+			ItemNameSnapshot: name,
+			Quantity:         qty.String(),
+		})
+	}
+	result, err := domorder.Quote(qlines, adjustments)
+	if err != nil {
+		return result, errUnprocessable
+	}
+	for i := range result.Lines {
+		result.Lines[i].CatalogItemID = meta[i].CatalogItemID
+		result.Lines[i].ItemNameSnapshot = meta[i].ItemNameSnapshot
+		result.Lines[i].Quantity = meta[i].Quantity
+	}
+	return result, nil
+}
 
 // OrderByPublic resolves a public_id to its internal id within a shop.
 func (s *Store) OrderByPublic(ctx context.Context, q DBTX, shopID int64, publicID string) (Order, error) {
@@ -296,12 +372,43 @@ func (s *Store) RemoveOrderLine(ctx context.Context, tx pgx.Tx, shopID, operator
 	return s.OrderByPublic(ctx, tx, shopID, orderPub)
 }
 
-// Adjustment is a whole-order discount/rounding entry, allocated to lines by
-// the caller before insertion (design/06 F-01 stage C).
+// Adjustment is a whole-order discount entry in the structured form defined
+// by ADR-0020: type (coupon/promotion/rounding/manual/other), a bill title,
+// an optional long description and a coupon source_id (coupon only). It is
+// persisted in order_price_adjustments (ADR-0021) and allocated to lines by
+// the Quote pure function (ADR-0019).
 type Adjustment struct {
-	Seq    int    `json:"seq"`
-	Amount string `json:"amount"`
-	Reason string `json:"reason"`
+	Seq         int    `json:"seq"`
+	Type        string `json:"type"`
+	Amount      string `json:"amount"`
+	SourceID    *int64 `json:"source_id,omitempty"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+}
+
+// ValidateAdjustment enforces the ADR-0020 shape: type is one of five values,
+// amount is non-negative, title is non-empty, and source_id is present only
+// for coupon (and then must be a positive internal id). Coupon existence is
+// NOT checked here — the coupon domain does not exist yet.
+func ValidateAdjustment(a Adjustment) error {
+	switch a.Type {
+	case "coupon", "promotion", "rounding", "manual", "other":
+	default:
+		return apierrors.InvalidArgument
+	}
+	if strings.TrimSpace(a.Title) == "" {
+		return apierrors.InvalidArgument
+	}
+	if a.SourceID != nil && *a.SourceID <= 0 {
+		return apierrors.InvalidArgument
+	}
+	if a.Type == "coupon" && a.SourceID == nil {
+		return apierrors.InvalidArgument
+	}
+	if a.Type != "coupon" && a.SourceID != nil {
+		return apierrors.InvalidArgument
+	}
+	return nil
 }
 
 // SubmitOrder re-prices the order: recomputes the line total, validates the
@@ -375,12 +482,20 @@ func (s *Store) SubmitOrder(ctx context.Context, tx pgx.Tx, shopID, operatorID i
 		return v, errUnprocessable
 	}
 
-	// Persist adjustments at order level (allocation to lines is a pure report,
-	// not a separate row set in this schema).
+	// Persist adjustments at order level (ADR-0020/0021): reason is structured
+	// as type + title + description, with source_id reserved for coupons.
 	for _, a := range adjustments {
+		if a.Seq <= 0 {
+			return v, apierrors.InvalidArgument
+		}
+		if err := ValidateAdjustment(a); err != nil {
+			return v, err
+		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO price_adjustments (shop_id,order_id,seq,amount,reason)
-			VALUES ($1,$2,$3,$4::numeric,$5)`, shopID, v.ID, a.Seq, a.Amount, a.Reason); err != nil {
+			INSERT INTO order_price_adjustments
+			  (shop_id,order_id,seq,type,amount,source_id,title,description)
+			VALUES ($1,$2,$3,$4,$5::numeric,$6,$7,$8)`,
+			shopID, v.ID, a.Seq, a.Type, a.Amount, a.SourceID, a.Title, a.Description); err != nil {
 			return v, err
 		}
 	}
