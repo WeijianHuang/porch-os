@@ -47,6 +47,11 @@ type OrderLine struct {
 	Amount           string `json:"amount"`
 }
 
+// GetCursor enables keyset pagination for ListOrders. It is exported so the
+// http layer's pageResponse type assertion can see it across packages; an
+// unexported method can never satisfy an interface declared in another package.
+func (v Order) GetCursor() (time.Time, int64) { return v.CreatedAt, v.ID }
+
 const orderCols = `public_id::text, order_no, status,
   (SELECT public_id::text FROM members WHERE members.id=orders.member_id),
   (SELECT public_id::text FROM shifts WHERE shifts.id=orders.shift_id),

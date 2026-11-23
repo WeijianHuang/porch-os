@@ -137,4 +137,4 @@ func (s *Store) UpsertSetting(ctx context.Context, tx pgx.Tx, shopID int64, valu
 
 func IsNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
 
-func (s Shop) getCursor() (time.Time, int64) { return s.CreatedAt, s.ID }
+func (s Shop) GetCursor() (time.Time, int64) { return s.CreatedAt, s.ID }

@@ -157,4 +157,4 @@ func (s *Store) PutOverride(ctx context.Context, tx pgx.Tx, shopID, itemID int64
 	return err
 }
 
-func (v CatalogItem) getCursor() (time.Time, int64) { return v.CreatedAt, v.ID }
+func (v CatalogItem) GetCursor() (time.Time, int64) { return v.CreatedAt, v.ID }

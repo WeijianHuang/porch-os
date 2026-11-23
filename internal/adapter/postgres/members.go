@@ -167,4 +167,4 @@ func (s *Store) Topup(ctx context.Context, tx pgx.Tx, shopID, memberID int64, am
 	return after, err
 }
 
-func (m Member) getCursor() (time.Time, int64) { return m.CreatedAt, m.ID }
+func (m Member) GetCursor() (time.Time, int64) { return m.CreatedAt, m.ID }

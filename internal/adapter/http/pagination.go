@@ -46,8 +46,8 @@ func parseList(c *gin.Context) (int, *time.Time, int64, error) {
 func pageResponse(last any, page postgres.Page) gin.H {
 	out := gin.H{"has_more": page.HasMore}
 	if page.HasMore && last != nil {
-		if item, ok := last.(interface{ getCursor() (time.Time, int64) }); ok {
-			t, id := item.getCursor()
+		if item, ok := last.(interface{ GetCursor() (time.Time, int64) }); ok {
+			t, id := item.GetCursor()
 			b, _ := json.Marshal(cursor{T: t, I: id})
 			out["next_cursor"] = base64.RawURLEncoding.EncodeToString(b)
 		}
