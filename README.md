@@ -149,7 +149,7 @@ CHANGELOG.md        变更记录
 Prerequisites: Go 1.25+ (matching `go.mod`) and a running PostgreSQL 18.7 (`docker compose up -d db`).
 
 ```bash
-cp .env.example .env          # set DATABASE_URL / JWT_SECRET / EXPECTED_SCHEMA_VERSION=9
+cp .env.example .env          # set DATABASE_URL / JWT_SECRET / EXPECTED_SCHEMA_VERSION=10
 go run ./cmd/job migrate      # the ONLY process allowed to change the schema
 SEED_LOGIN=admin SEED_PASSWORD=<local-password> go run ./cmd/job seed-user
 go run ./cmd/api              # /health and /ready on PORT (default 8080)
@@ -191,6 +191,9 @@ nor `worker` runs migrations at startup.
 | `docs/decisions/0015-staff-state-and-position-controls.md` | 服务人员状态、停止轮转与位次人工控制（第七次受控扩展，无 schema 变更） |
 | `docs/decisions/0017-id-cards-and-square-slots.md` | 店内 ID 卡与方形服务格子（第九次受控扩展，schema 版本 8） |
 | `docs/decisions/0018-service-duration.md` | 服务类目录项时长 `duration_minutes` 与幂等种子（第十次受控扩展，schema 版本 9） |
+| `docs/decisions/0019-order-price-preview.md` | 订单实时试价端点 `orders/price` 与统一计价函数（第十一次受控扩展）；订单域落地于 `00010_orders.sql`，schema 版本 10，契约另见 ADR-0013 / 0014 / 0016 |
+| `docs/decisions/0020-structured-price-adjustments.md` | 订单让利原因结构化（`type` 五值 + `title`/`description`、券以 `source_id` 预留追溯，第十二次受控扩展，无独立迁移版本） |
+| `docs/decisions/0021-rename-order-price-adjustments.md` | `price_adjustments` 更名为 `order_price_adjustments`（含约束名，第十三次受控扩展；历史 ADR 旧名别名映射） |
 | `docs/decisions/0008-design-freeze-and-nq-resolutions.md` | NQ-01–16 全部决议、DP-01–07 接受、详细设计冻结、R1 范围与验收、Docker 2+2 / Go Job / 连接池 / 审计 / 容量基线 |
 | `CONTRIBUTING.md` | 分支、提交与 PR 约定 |
 | `CHANGELOG.md` | 变更记录 |

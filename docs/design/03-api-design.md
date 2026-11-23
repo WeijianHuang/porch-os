@@ -142,7 +142,7 @@
 
 | 项 | 约定 |
 |---|---|
-| 适用范围 | **所有产生业务副作用的写操作**（POST/PUT/PATCH/DELETE），包括退款、调拨、导出创建 |
+| 适用范围 | **所有产生业务副作用的写操作**（POST/PUT/PATCH/DELETE），包括退款、调拨、导出创建；**例外：只读试价 `POST /shops/{shopId}/orders/price` 不要求幂等键**（无副作用，ADR-0019；中间件对该单一路径豁免，不得扩大到其他端点） |
 | 请求头 | `Idempotency-Key: <客户端生成的 UUID>`，缺失写操作返回 `400 INVALID_ARGUMENT` |
 | 作用域 | `scope = user:<id> \| shop:<id>`；跨店显式动作使用动作自身 ID 作为 scope |
 | 请求指纹 | `sha256(method + path + canonical_body)` 存 `request_hash` |
@@ -206,6 +206,7 @@
 | scheduling | `POST /api/v1/shops/{shopId}/scheduling/pins/release-expired` | 到期 / 不可用自动释放 |
 | scheduling | `POST /api/v1/shops/{shopId}/scheduling/events/{eventId}/{action}` | `restore` 回原位 / `cancel` 取消 / `complete` 完成 / `assignment-method` 指派方式变更 |
 | order | `POST /api/v1/shops/{shopId}/orders` | 开单（`draft`） |
+| order | `POST /api/v1/shops/{shopId}/orders/price` | 实时试价（只读、不落库、无需 `Idempotency-Key`，ADR-0019；权限 `order.read`，店员可用）：请求全量 `lines[{catalog_item_id,quantity}]` + 可选 `adjustments[{type,amount,source_id?,title,description?}]`（`type` 五值见 ADR-0020，券必带 `source_id`），返回逐行快照价与折让分摊、`subtotal` / `discount_amount` / `total_amount`；服务端按 `COALESCE(本店覆盖价, 目录基础价)` 取价，与 `submit` 共用同一 `Quote` 纯函数实现所见即所得；折让 > 小计 → `422`，目录项不存在 / 数量非法 / 已下架 → `400`。详见第 10 节 |
 | order | `GET /api/v1/shops/{shopId}/orders` | 单据列表（keyset 分页） |
 | order | `GET /api/v1/shops/{shopId}/orders/{id}` | 单据详情（含明细）；金额响应含不可变 `total_amount` / `discount_amount` 与**派生** `paid_amount` / `refunded_amount` / `refundable_amount`（从 `payments` / `refunds` 的 succeeded 行聚合，不落库；已退显式过滤 `kind='sale'`，不含充值退款，ADR-0014/0016） |
 | order | `POST / DELETE /api/v1/shops/{shopId}/orders/{id}/lines` | 加项 / 删项 |
@@ -218,7 +219,7 @@
 | order | `POST /api/v1/shops/{shopId}/shifts/open` | 开班 |
 | order | `POST /api/v1/shops/{shopId}/shifts/{id}/close` | 关班结算 |
 
-> 收款 / 退款归属（[ADR-0013](decisions/0013-payment-and-refund-ownership.md) / [ADR-0014](decisions/0014-derived-amounts-and-refund-entries.md) / [ADR-0016](decisions/0016-refund-source-and-topup-reversal.md)）：订单支付落 `payments(kind='sale', order_id=<id>)`，会员充值落 `kind='topup'` 且不写 `order_id`；两类收款都记录本次动作的 `shift_id` / `operator_id`。退款以 `kind` 区分销售 / 充值：销售退款挂订单、充值退款挂会员，均自带退款时的班次与操作人（可与原单不同），累计退款不超过原支付额；退款请求显式带 `refund_entries` 渠道明细，系统只校验、不自动分摊，**只退实际支付部分**（券优惠进 `price_adjustments`、不进支付 / 退款渠道），**禁止跨店退款**，充值退款余额不足整笔拒绝。订单详情的实付 / 已退 / 可退为派生字段（从 succeeded 记录聚合，已退过滤 `kind='sale'`），订单表不存 `paid_amount`；单号日期取 `business_date`（UTC+8 + 门店切点），与日报 / 班次 / 汇总同口径。班次 / 人员维度统计从明细按需聚合，`daily_shop_summary` 粒度不变；本次不新增其他收款 / 退款专属端点。
+> 收款 / 退款归属（[ADR-0013](decisions/0013-payment-and-refund-ownership.md) / [ADR-0014](decisions/0014-derived-amounts-and-refund-entries.md) / [ADR-0016](decisions/0016-refund-source-and-topup-reversal.md)）：订单支付落 `payments(kind='sale', order_id=<id>)`，会员充值落 `kind='topup'` 且不写 `order_id`；两类收款都记录本次动作的 `shift_id` / `operator_id`。退款以 `kind` 区分销售 / 充值：销售退款挂订单、充值退款挂会员，均自带退款时的班次与操作人（可与原单不同），累计退款不超过原支付额；退款请求显式带 `refund_entries` 渠道明细，系统只校验、不自动分摊，**只退实际支付部分**（券优惠进 `order_price_adjustments`、不进支付 / 退款渠道），**禁止跨店退款**，充值退款余额不足整笔拒绝。订单详情的实付 / 已退 / 可退为派生字段（从 succeeded 记录聚合，已退过滤 `kind='sale'`），订单表不存 `paid_amount`；单号日期取 `business_date`（UTC+8 + 门店切点），与日报 / 班次 / 汇总同口径。班次 / 人员维度统计从明细按需聚合，`daily_shop_summary` 粒度不变；本次不新增其他收款 / 退款专属端点。
 | inventory | `GET /api/v1/shops/{shopId}/inventory` | 库存余额 |
 | inventory | `POST /api/v1/shops/{shopId}/inventory/adjustments` | 出入库调整 |
 | inventory | `GET /api/v1/shops/{shopId}/inventory/movements` | 库存流水 |
@@ -264,6 +265,64 @@
 2. 响应快照测试只断言**字段集合与类型**，动态值（时间、ID、金额）做归一化，不比对字面值。
 3. 破坏性变更清单：删除/重命名字段、改类型、改错误码语义、改分页形状、改门店上下文规则。这类变更须升版本或走弃用期，并同步 `porch-console`。
 4. 端点清单（第 8 节）与 OpenAPI 一一对应；新增端点必须同时更新本册与契约文件。
+
+## 10. 订单实时试价 `POST /shops/{shopId}/orders/price`（ADR-0019）
+
+收银场景增减项时即时显示应付与优惠分摊。该端点**只读、不落库、不占单号、不开事务、不写幂等记录、不发事件**；权限 `order.read`（店员 / 店长 / 管理员均可；`order.write` 仅店长 + 管理员，店员开单需另立 ADR），单店上下文同 §3。价格取 `COALESCE(本店覆盖价, catalog_items.base_price)`（覆盖是整价替换、非增量），与加项快照、F-01 `submit` 后端重算**共用同一个 `Quote` 纯函数**，保证所见即所得（仅当两次调用间目录改价才可能不同，由 `submit` 的 `422` 兜住并触发前端重新试价）。
+
+请求体（`lines` 为**全量**明细，金额 / 数量均为定点字符串）：
+
+```json
+{
+  "lines": [
+    { "catalog_item_id": "019...", "quantity": "2.000" },
+    { "catalog_item_id": "019...", "quantity": "1.000" }
+  ],
+  "adjustments": [
+    { "type": "rounding", "amount": "0.50", "title": "抹零" },
+    { "type": "coupon", "amount": "5.00", "source_id": 123, "title": "满100减10", "description": "会员生日券" }
+  ]
+}
+```
+
+响应体：
+
+```json
+{
+  "data": {
+    "lines": [
+      {
+        "line_no": 1,
+        "catalog_item_id": "019...",
+        "item_name_snapshot": "示例服务",
+        "quantity": "2.000",
+        "unit_price": "30.00",
+        "amount": "60.00",
+        "allocated_adjustment": "3.00",
+        "line_total": "57.00"
+      }
+    ],
+    "subtotal": "60.00",
+    "discount_amount": "5.00",
+    "total_amount": "55.00"
+  },
+  "meta": { "request_id": "req_01J..." }
+}
+```
+
+| 项 | 规则 |
+|---|---|
+| 权限 | `order.read`：staff / manager / admin 均可试价；`order.write`（开单 / 收款 / 退款）仅 manager + admin，店员开单须另立 ADR。`member.topup.write` 仅 manager + admin |
+| 取价 | `unit_price` = `COALESCE(shop_catalog_overrides.price, catalog_items.base_price)`（覆盖价是整价替换、不是增量；有本店覆盖行用覆盖价，否则用基础价）；`item_name_snapshot` 取当前目录名（与加项快照同口径） |
+| 上下架 | `catalog_items.active = false` 或（有覆盖行时）`shop_catalog_overrides.available = false` 视为不可用 → `400 INVALID_ARGUMENT`（`details.reason: item_unavailable`）；下架项不得进入试价结果，也不得据此开单 |
+| 行金额 | `amount = unit_price × quantity`（`numeric(14,2)`，scale 2、ROUND_HALF_UP）；`subtotal = Σ amount` |
+| 折让输入 | `adjustments[]` 每项：`type` 必填且为 `coupon` / `promotion` / `rounding` / `manual` / `other` 之一（ADR-0020）；`amount` 非负；`title` 必填非空（账单短标题）；`description` 可选；`type='coupon'` 时 `source_id`（bigint，券实例内部 ID）必填且为正整数（本期只校验形状、不查券是否存在），其他类型必须为空。券不是支付（ADR-0016）；`discount_amount = Σ adjustments.amount` |
+| 分摊 | **先把全部 `adjustments` 合并为单个 `discount_amount`，再一次性分摊**（不是逐笔优惠各分摊一遍）；`AllocateByWeights` 按行 `amount` 权重分摊，余数按 `line_no` 升序落最后一行；`Σ allocated_adjustment = discount_amount` 且结果确定；`line_total = amount − allocated_adjustment`。响应只给合并后的每行分摊，逐笔优惠展示由前端按请求 `adjustments` 自行渲染 |
+| 合计 | `total_amount = subtotal − discount_amount` |
+| 校验 | `quantity <= 0` / 非数字 / 目录项不存在 / 已下架 → `400 INVALID_ARGUMENT`（`details` 指向行）；`discount_amount > subtotal` → `422 UNPROCESSABLE` |
+| 幂等 | **不需要 `Idempotency-Key`**（见第 6 节例外）；只读无副作用 |
+| 限流 / 超时 | 同 §9：按主体 + 门店限流、5 s 超时；请求体受 1 MiB 上限约束 |
+| 不做 | 不锁库存、不校验余额 / 班次（属 `submit` 与支付事务职责）；不做会员价 / 时段价（另立 ADR） |
 
 ---
 

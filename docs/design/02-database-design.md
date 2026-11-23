@@ -58,7 +58,7 @@
 | order | `shifts` | B | 收银班次 | `(shop_id, shift_no)`；部分唯一：一店最多一个 `open` |
 | order | `orders` | B | 单据 | **`(shop_id, order_no)` 店内唯一** |
 | order | `order_lines` | B | 单据明细（价格快照） | `(shop_id, order_id, line_no)` |
-| order | `price_adjustments` | B | 整单折扣/抹零（已分摊到行） | `(shop_id, order_id, seq)` |
+| order | `order_price_adjustments` | B | 整单让利（`type` 区分券 / 活动 / 抹零 / 手工 / 其他；`title` 账单短标题、`description` 详细原因；券以 `source_id` 预留追溯锚点，ADR-0020；已分摊到行）。**专属于 Order 聚合**：`order_id NOT NULL` + 复合外键钉死订单与同店，无其他业务使用者；充值赠送走 `balance_ledger`，非同构让利另立新表，禁止改成多态关联（见 ADR-0020「表的适用边界」） | `(shop_id, order_id, seq)` |
 | order | `payments` | B | 收款（`kind` = `sale` / `topup` / `other`；`sale` 挂订单、`topup` 挂会员） | `(shop_id, idempotency_key)`；`sale` 另受 `(shop_id, order_id)` 外键 |
 | order | `payment_entries` | B | 组合支付的一笔（逐实际资金渠道，不含券） | `(shop_id, payment_id, seq)` |
 | order | `refunds` | B | 退款单（`kind`=sale/topup，`order_id`/`member_id` 二选一；自带退款班次 / 操作人，无 `refunding` 态；禁止跨店） | `(shop_id, refund_no)` |
@@ -78,7 +78,7 @@
 
 ## 3. 核心 DDL（PG 18.7 语法示例）
 
-以下示例刻意包含「复合外键把 `shop_id` 钉死」这一关键手法：明细无法通过外键挂到别家店的单据上。订单域的收款 / 退款按 [ADR-0013](decisions/0013-payment-and-refund-ownership.md) 与 [ADR-0016](decisions/0016-refund-source-and-topup-reversal.md) 定义：`payments.kind` 区分销售 / 充值 / 其他，`sale` 与 `topup` 由 CHECK 约束钉死订单 / 会员的填法；`payments` 与 `refunds` 的 `shift_id` / `operator_id` 记录动作发生时的班次与操作人（只持 ID、不加外键），退款归属不继承订单。`refunds.kind` 对齐原收款（`sale`/`topup`）、`order_id` 可空、`topup` 退款填 `member_id`；退款只退实际支付部分，**券不是支付渠道**、一律进 `price_adjustments`，故 `payment_entries` / `refund_entries` 的 `method` CHECK 不含 `coupon`（仅 `cash`/`balance`/`card`）。
+以下示例刻意包含「复合外键把 `shop_id` 钉死」这一关键手法：明细无法通过外键挂到别家店的单据上。订单域的收款 / 退款按 [ADR-0013](decisions/0013-payment-and-refund-ownership.md) 与 [ADR-0016](decisions/0016-refund-source-and-topup-reversal.md) 定义：`payments.kind` 区分销售 / 充值 / 其他，`sale` 与 `topup` 由 CHECK 约束钉死订单 / 会员的填法；`payments` 与 `refunds` 的 `shift_id` / `operator_id` 记录动作发生时的班次与操作人（只持 ID、不加外键），退款归属不继承订单。`refunds.kind` 对齐原收款（`sale`/`topup`）、`order_id` 可空、`topup` 退款填 `member_id`；退款只退实际支付部分，**券不是支付渠道**、一律进 `order_price_adjustments`，故 `payment_entries` / `refund_entries` 的 `method` CHECK 不含 `coupon`（仅 `cash`/`balance`/`card`）。
 
 ```sql
 -- +goose Up
@@ -253,21 +253,34 @@ CREATE TABLE payment_entries (
 );
 CREATE INDEX idx_payment_entries_shop_payment ON payment_entries (shop_id, payment_id);
 
--- 整单折扣 / 抹零：分摊到行由计价纯函数完成，表本身挂订单级
-CREATE TABLE price_adjustments (
-  id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  shop_id     bigint      NOT NULL,
-  order_id    bigint      NOT NULL,
-  seq         integer     NOT NULL,
-  amount      numeric(14,2) NOT NULL,
-  reason      text,
-  created_at  timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT uq_price_adjustments_shop_order_seq UNIQUE (shop_id, order_id, seq),
-  CONSTRAINT fk_price_adjustments_order FOREIGN KEY (shop_id, order_id)
+-- 整单让利：原因结构化（ADR-0020），不用自由文本 reason。
+-- type 五值区分券 / 活动 / 抹零 / 手工 / 其他；title 账单短标题必填、
+-- description 详细原因可选；source_id 只持券实例内部 ID（无外键，券表未建），
+-- CHECK 保证只有 coupon 带 source_id；券表落地时补 (shop_id, source_id) 复合外键。
+-- 分摊到行由计价纯函数完成，表本身挂订单级。
+CREATE TABLE order_price_adjustments (
+  id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  shop_id      bigint        NOT NULL,
+  order_id     bigint        NOT NULL,
+  seq          integer       NOT NULL,
+  type         text          NOT NULL,
+  amount       numeric(14,2) NOT NULL,
+  source_id    bigint,
+  title        text          NOT NULL,
+  description  text,
+  created_at   timestamptz   NOT NULL DEFAULT now(),
+  CONSTRAINT uq_order_price_adjustments_shop_order_seq UNIQUE (shop_id, order_id, seq),
+  CONSTRAINT fk_order_price_adjustments_order FOREIGN KEY (shop_id, order_id)
               REFERENCES orders (shop_id, id),
-  CONSTRAINT ck_price_adjustments_amount CHECK (amount >= 0)
+  CONSTRAINT ck_opa_type CHECK (type IN ('coupon','promotion','rounding','manual','other')),
+  CONSTRAINT ck_opa_type_source CHECK (
+    (type = 'coupon' AND source_id IS NOT NULL) OR
+    (type <> 'coupon' AND source_id IS NULL)
+  ),
+  CONSTRAINT ck_opa_amount CHECK (amount >= 0),
+  CONSTRAINT ck_opa_title CHECK (length(btrim(title)) > 0)
 );
-CREATE INDEX idx_price_adjustments_shop_order ON price_adjustments (shop_id, order_id);
+CREATE INDEX idx_order_price_adjustments_shop_order ON order_price_adjustments (shop_id, order_id);
 
 -- 退款：shift_id / operator_id 是退款动作本身的归属，不继承订单（ADR-0013）
 -- kind 对齐原收款（sale/topup）、order_id 可空、topup 填 member_id（ADR-0016）；

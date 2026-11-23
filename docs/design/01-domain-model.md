@@ -19,8 +19,8 @@
 | `shop` | `Shop` | `ShopSettings`、`BusinessDay` | A 全局 | `Shop.id` 即 `shop_id`；不设 `ShopGroup`，门店之间无分组 / 层级关系（ADR-0005） |
 | `catalog` | `CatalogItem` | `Category`、`ShopCatalogOverride` | A 全局 + B 覆盖 | 目录全局唯一；价格/上下架按店覆盖，覆盖记录带 `shop_id` |
 | `member` | `Member` | `MemberBalance`、`BalanceLedger` | A 档案 + B 账 | 档案按手机号全局唯一；余额与流水按店独立 |
-| `order` | `Order` | `OrderLine`、`PriceAdjustment` | B | 单据与所有明细同属一个 `shop_id`；金额恒等于明细合计减调整 |
-| `order` | `Payment` | `PaymentEntry`（组合支付的一笔） | B | 「收款」是独立聚合根，按 `kind`（`sale` / `topup` / `other`）区分来源；`sale` 必挂订单、可多次尝试（`failed` 终态、重试新行留审计链）、组合支付逐渠道记录且合计等于收款额；`topup` 必挂会员且不挂订单（ADR-0013）；`method` 只记**真实资金渠道**（`cash` / `balance` / `card`），券不是支付、一律进 `price_adjustments`（ADR-0016） |
+| `order` | `Order` | `OrderLine`、`PriceAdjustment` | B | 单据与所有明细同属一个 `shop_id`；金额恒等于明细合计减调整。`PriceAdjustment` 的原因已结构化（ADR-0020）：`type` 五值（`coupon` / `promotion` / `rounding` / `manual` / `other`）+ `title`（账单短标题、必填）+ `description`（详细原因、可选）；券以 `source_id` 只持 ID 预留追溯（无外键，券表未建） |
+| `order` | `Payment` | `PaymentEntry`（组合支付的一笔） | B | 「收款」是独立聚合根，按 `kind`（`sale` / `topup` / `other`）区分来源；`sale` 必挂订单、可多次尝试（`failed` 终态、重试新行留审计链）、组合支付逐渠道记录且合计等于收款额；`topup` 必挂会员且不挂订单（ADR-0013）；`method` 只记**真实资金渠道**（`cash` / `balance` / `card`），券不是支付、一律进 `order_price_adjustments`（ADR-0016） |
 | `order` | `Refund` | `RefundEntry`（退款的一笔渠道明细） | B | 退款以 `kind`（`sale` / `topup`）区分来源、必等于原收款的 `kind`；`sale` 挂订单、`topup` 挂会员（`member_id`）；引用已成功的支付且不修改原单，累计退款 ≤ 原支付；退款自带 `shift_id` / `operator_id`（退款动作的班次与操作人，不继承订单），常跨班次发生；退款请求显式携带 `refund_entries`（渠道 + 金额）且只退实际支付部分，系统只校验渠道合法性与「单渠道累计退款 ≤ 该渠道原支付额」，不自动分摊、不决定超额处理；**禁止跨店退款、充值余额不足整笔拒绝**（ADR-0013 / 0014 / 0016） |
 | `order` | `Shift` | — | B | 一个门店同一时刻最多一个 `open` 班次（数据库部分唯一索引保证） |
 | `inventory` | `InventoryBalance` | `StockMovement`、`StockTransfer` | B | 余额 = 流水累计；不允许负库存（除非门店显式开启允许） |
@@ -74,7 +74,7 @@
 
 **`OrderLine`**：`order_id`、`catalog_item_id`（只持 ID）、`quantity`、`unit_price`、`amount`、`line_no`。明细不随目录价格变动而回溯改写——下单时快照价格。
 
-**`Payment` / `PaymentEntry`**：一次收款可组合多种方式（现金、卡、余额），每个 `PaymentEntry` 记方式与金额，合计等于本次收款额。禁止把「组合支付」压成一个字符串字段。`method` 只记**真实资金渠道**（`cash` / `balance` / `card`）：**券不是支付，它减少应收、不发生资金转移，一律进 `price_adjustments`（按明细分摊），不得进 `payment_entries`**（ADR-0016）；本期无卡券实体 / 发放 / 核销规划，`card` 保留枚举位但本期接入以 API 白名单为准。`Payment` 以 `kind` 区分来源：`sale`（销售收款，`order_id` 必填，可多次尝试，失败终态、重试生成新行）、`topup`（会员充值，`order_id` 为空、`member_id` 必填）、`other`（其他收款，本期不开放端点）；三者由数据库 CHECK 约束钉死，不允许「有订单却是充值」的脏数据（ADR-0013）。`payments` 与 `refunds` 均带 `shift_id` / `operator_id`，记录**动作发生时**的班次与操作人（只持 ID、不建外键导航）；退款的归属不继承原订单，因为退款常发生在另一班次、由另一人操作。
+**`Payment` / `PaymentEntry`**：一次收款可组合多种方式（现金、卡、余额），每个 `PaymentEntry` 记方式与金额，合计等于本次收款额。禁止把「组合支付」压成一个字符串字段。`method` 只记**真实资金渠道**（`cash` / `balance` / `card`）：**券不是支付，它减少应收、不发生资金转移，一律进 `order_price_adjustments`（按明细分摊），不得进 `payment_entries`**（ADR-0016）；本期无卡券实体 / 发放 / 核销规划，`card` 保留枚举位但本期接入以 API 白名单为准。`Payment` 以 `kind` 区分来源：`sale`（销售收款，`order_id` 必填，可多次尝试，失败终态、重试生成新行）、`topup`（会员充值，`order_id` 为空、`member_id` 必填）、`other`（其他收款，本期不开放端点）；三者由数据库 CHECK 约束钉死，不允许「有订单却是充值」的脏数据（ADR-0013）。`payments` 与 `refunds` 均带 `shift_id` / `operator_id`，记录**动作发生时**的班次与操作人（只持 ID、不建外键导航）；退款的归属不继承原订单，因为退款常发生在另一班次、由另一人操作。
 
 **`Refund` / `RefundEntry`**（ADR-0016）：退款以 `kind`（`sale` / `topup`）区分来源，必等于原收款 `payments.kind`；`sale` 挂订单、`topup` 挂会员（`member_id`），`order_id` 可空。退款只退实际支付部分，`refund_entries.method` 同 `payment_entries` 口径（不含券）；充值退款的余额扣回与本店账强绑，**禁止跨店**。
 
@@ -134,7 +134,9 @@ draft ──► open ──► pending_payment ──► paid ──► complete
 
 > 金额与时间的口径收窄后，领域层不再需要任何汇率、时区表或换算函数；`internal/domain/` 保持零外部依赖。
 
-**计价与分摊**：整单折扣、抹零、优惠都要按明细分摊到行，纯函数 `Allocate(total, weights)` 保证「分摊之和恒等于总额」。余数按固定顺序（明细 `line_no` 升序）落到最后一项，保证相同输入永远得到相同结果，可表驱动测试。
+**计价与分摊**：整单折扣、抹零、优惠都要按明细分摊到行，纯函数 `Allocate(total, weights)` 保证「分摊之和恒等于总额」。余数按固定顺序（明细 `line_no` 升序）落到最后一项，保证相同输入永远得到相同结果，可表驱动测试。整单调整按 `type` 区分优惠券 / 门店活动 / 抹零 / 手工 / 其他（ADR-0020），多笔先合并总额再一次性分摊；券以 `source_id` 预留追溯锚点，卡券体系落地时补复合外键与本店校验（本期只做字段级支持，不建券表）。
+
+**统一计价纯函数 `Quote`（ADR-0019）**：`POST /shops/{shopId}/orders/price` 的实时试价与 F-01 `submit` 阶段的后端重算**必须调用同一个 `Quote`**（内部用 `Allocate` 分摊折让），保证「界面所见 = 最终结账」。试价只读、不落库、不开事务、不写幂等记录；取价口径为 `COALESCE(shop_catalog_overrides.price, catalog_items.base_price)`（本店覆盖价优先、否则基础价），与加项快照同口径；下架项（目录 `active=false` 或本店 `available=false`）一律拒绝试价与开单。折扣 / 抹零 / 券一律作为整单调整按金额传入并分摊到行（券不是支付，ADR-0016）；不得在端点与用例层各自重算分摊，口径只在 `Quote` 定义一次。
 
 ## 7. 领域事件（经 Outbox 投递）
 

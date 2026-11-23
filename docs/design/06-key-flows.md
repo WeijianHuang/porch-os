@@ -48,14 +48,16 @@ Client ──► API 中间件 ──► Usecase ──► Domain(纯函数) ─
 3. 事务：乐观锁更新 `orders(version)`、`INSERT order_lines`、写幂等记录。
 4. 冲突 → `409 VERSION_CONFLICT`（可重试）：客户端重读后复用同一幂等键重试。
 
+> **收银实时试价（ADR-0019）**：收银机增减项时前端调 `POST /shops/{shopId}/orders/price` 刷新应付与优惠分摊。该端点只读、不落库、不占单号、无需幂等键；服务端按 `COALESCE(shop_catalog_overrides.price, catalog_items.base_price)` 取价（覆盖价优先，下架项拒绝），与步骤 2 的加项快照同口径，返回逐行 `unit_price` / `amount` / `allocated_adjustment` / `line_total` 与 `subtotal` / `discount_amount` / `total_amount`。前端据此展示，最终提交仍以本阶段落库的快照价为准。
+
 ### 阶段 C｜提交结账 `open → pending_payment`
 
 | 步 | 动作 |
 |---|---|
-| 1 | **一致性校验**：后端重算明细合计与客户端提交金额，不一致 → `422 UNPROCESSABLE`（不信任前端金额） |
-| 2 | 计价纯函数：整单折扣/抹零按明细权重分摊，`Allocate` 保证「分摊之和 = 折扣总额」，余数落在 `line_no` 最大的行 |
+| 1 | **一致性校验**：后端调用 `Quote` 重算明细合计与客户端提交金额（与试价端点共用同一纯函数，ADR-0019），不一致 → `422 UNPROCESSABLE`（不信任前端金额；两次调用间目录改价时触发，前端须重新试价） |
+| 2 | 计价纯函数 `Quote` 内部用 `Allocate`：整单折扣/抹零按明细权重分摊，保证「分摊之和 = 折扣总额」，余数落在 `line_no` 最大的行 |
 | 3 | `CanTransition(open → pending_payment)`；非法 → `412` |
-| 4 | 事务：写 `price_adjustments`、更新 `orders.total_amount` 与状态、锁库存行（`FOR UPDATE`）、写事件、写幂等记录 |
+| 4 | 事务：写 `order_price_adjustments`、更新 `orders.total_amount` 与状态、锁库存行（`FOR UPDATE`）、写事件、写幂等记录 |
 
 ### 阶段 D｜组合支付 `pending_payment → paid`
 
@@ -101,7 +103,7 @@ paid / completed ──► refunded（全额）
 
 1. 校验：原单处于 `paid` / `completed` / `partially_refunded`；原支付 `payments.status = 'succeeded'`；请求体显式携带 `refund_entries`（`method` + `amount`），断言 `Σ refund_entries.amount = amount`、每个 `method` 都在原支付 `payment_entries` 中出现。
 2. 事务：对同一 `payment_id` 加锁 → 汇总既有 `succeeded` 退款额并校验累计 ≤ 原支付额 → 对涉及的每个 `(payment_id, method)` 加锁、汇总该渠道累计退款并校验 ≤ 该渠道原支付额（超限 → `409`，由前端 / 客户协商，**不自动改派或按比例分摊**）→ `INSERT refunds(kind='sale', payment_id, order_id, shift_id, operator_id, amount, reason)` 与 `INSERT refund_entries` → `UPDATE orders` 状态与 `version`、按原 `payment_entries` 反向回滚会员余额与库存、写反向流水、写 `refund.succeeded` 与 `shop.summary_dirty` 事件、写幂等记录。
-2a. **只退实际支付部分**：券优惠已在下单时进 `price_adjustments`、不进 `payment_entries`，可退额天然不含券（ADR-0016）；`refund_entries.method` 不含 `coupon`。**禁止跨店退款**：退款单 `shop_id` 强绑原支付与本店账，A 店单据不能在 B 店退。
+2a. **只退实际支付部分**：券优惠已在下单时进 `order_price_adjustments`、不进 `payment_entries`，可退额天然不含券（ADR-0016）；`refund_entries.method` 不含 `coupon`。**禁止跨店退款**：退款单 `shop_id` 强绑原支付与本店账，A 店单据不能在 B 店退。
 3. **退款单的 `shift_id` / `operator_id` 记录退款动作发生时的班次与操作人，不继承原订单**——已支付订单常在另一班次、由另一人退款（ADR-0013）。`shift_id`/`operator_id` 只持 ID、不加外键。
 4. **不修改原单金额、不删除明细、不回退到 `open`**（DP-05）：已支付单据是审计事实。实付 / 已退 / 可退均从记录派生，不落库（ADR-0014）。
 5. 部分退款后仍可再次退款，直到累计额达到上限；每次都是独立幂等事务，再次退完时 `partially_refunded → refunded`。
