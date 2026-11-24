@@ -26,7 +26,7 @@ type Flat struct {
 
 // Group is one floor partition produced by GroupByFloor.
 type Group struct {
-	Floor int   `json:"floor"`
+	Floor int    `json:"floor"`
 	Rooms []Flat `json:"rooms"`
 }
 
