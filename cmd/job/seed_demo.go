@@ -20,19 +20,40 @@ type demoTool struct {
 	name     string
 	price    string
 	duration int
+	category string
 }
 
 var demoServiceItems = []demoTool{
-	{"SVC-001", "标准服务 15 分钟", "39.00", 15},
-	{"SVC-002", "标准服务 30 分钟", "68.00", 30},
-	{"SVC-003", "进阶服务 45 分钟", "98.00", 45},
-	{"SVC-004", "进阶服务 60 分钟", "128.00", 60},
-	{"SVC-005", "深度服务 90 分钟", "188.00", 90},
-	{"SVC-006", "深度服务 120 分钟", "238.00", 120},
-	{"SVC-007", "快速服务 20 分钟", "49.00", 20},
-	{"SVC-008", "综合服务 75 分钟", "158.00", 75},
-	{"SVC-009", "专项服务 40 分钟", "88.00", 40},
-	{"SVC-010", "尊享服务 180 分钟", "338.00", 180},
+	{"SVC-001", "标准服务 15 分钟", "39.00", 15, "CAT-A"},
+	{"SVC-002", "标准服务 30 分钟", "68.00", 30, "CAT-A"},
+	{"SVC-003", "进阶服务 45 分钟", "98.00", 45, "CAT-B"},
+	{"SVC-004", "进阶服务 60 分钟", "128.00", 60, "CAT-B"},
+	{"SVC-005", "深度服务 90 分钟", "188.00", 90, "CAT-C"},
+	{"SVC-006", "深度服务 120 分钟", "238.00", 120, "CAT-C"},
+	{"SVC-007", "快速服务 20 分钟", "49.00", 20, "CAT-D"},
+	{"SVC-008", "综合服务 75 分钟", "158.00", 75, "CAT-C"},
+	{"SVC-009", "专项服务 40 分钟", "88.00", 40, "CAT-B"},
+	{"SVC-010", "尊享服务 180 分钟", "338.00", 180, "CAT-C"},
+}
+
+// ADR-0024: generic classification data only. Staff categories are
+// shop-scoped; catalog categories are global grouping labels for the picker.
+var demoStaffCategories = []struct {
+	code, name string
+	order      int
+}{
+	{"SC-A", "常规服务组", 1},
+	{"SC-B", "专项服务组", 2},
+}
+
+var demoCatalogCategories = []struct {
+	code, name string
+	order      int
+}{
+	{"CAT-A", "常规服务", 1},
+	{"CAT-B", "专项服务", 2},
+	{"CAT-C", "深度服务", 3},
+	{"CAT-D", "快捷服务", 4},
 }
 
 // seedDemo is a repeatable development helper: it writes 10 shop-scoped ID
@@ -94,10 +115,54 @@ func seedDemo(ctx context.Context, cfg config.Config) error {
 		items += int(tag.RowsAffected())
 	}
 
+	// ADR-0024: classification metadata and demo assignments. Re-running the
+	// seed is idempotent: inserts are guarded and assignments are overwritten
+	// with the same stable values.
+	sc := 0
+	for _, c := range demoStaffCategories {
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO staff_categories (shop_id, code, name, sort_order)
+			SELECT $1,$2,$3,$4
+			WHERE NOT EXISTS (SELECT 1 FROM staff_categories WHERE shop_id=$1 AND code=$2)`,
+			shopID, c.code, c.name, c.order)
+		if err != nil {
+			return err
+		}
+		sc += int(tag.RowsAffected())
+	}
+	cc := 0
+	for _, c := range demoCatalogCategories {
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO catalog_categories (code, name, sort_order)
+			SELECT $1,$2,$3
+			WHERE NOT EXISTS (SELECT 1 FROM catalog_categories WHERE parent_id IS NULL AND code=$1)`,
+			c.code, c.name, c.order)
+		if err != nil {
+			return err
+		}
+		cc += int(tag.RowsAffected())
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE staff st SET category_id = c.id
+		FROM staff_categories c
+		WHERE st.shop_id=$1 AND c.shop_id=$1
+		  AND c.code = CASE WHEN st.id % 2 = 1 THEN 'SC-A' ELSE 'SC-B' END`, shopID); err != nil {
+		return err
+	}
+	for _, it := range demoServiceItems {
+		if _, err := tx.Exec(ctx, `
+			UPDATE catalog_items i SET category_id = c.id
+			FROM catalog_categories c
+			WHERE i.sku=$1 AND c.parent_id IS NULL AND c.code=$2`, it.sku, it.category); err != nil {
+			return err
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
 	slog.Info("seed demo complete", "shop_id", shopID,
-		"cards_inserted", cards, "service_items_inserted", items)
+		"cards_inserted", cards, "service_items_inserted", items,
+		"staff_categories_inserted", sc, "catalog_categories_inserted", cc)
 	return nil
 }

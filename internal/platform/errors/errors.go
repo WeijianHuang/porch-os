@@ -49,12 +49,12 @@ func mapCode(code string) (int, bool) {
 	case "PERMISSION_DENIED":
 		return http.StatusForbidden, false
 	case "NOT_FOUND", "SNAPSHOT_MISSING", "EVENT_NOT_FOUND", "TASK_TYPE_NOT_FOUND", "CARD_NOT_FOUND",
-		"STAFF_NOT_FOUND", "ROOM_NOT_FOUND", "GROUP_NOT_FOUND", "MEMBER_NOT_IN_GROUP":
+		"STAFF_NOT_FOUND", "STAFF_CATEGORY_NOT_FOUND", "ROOM_NOT_FOUND", "GROUP_NOT_FOUND", "MEMBER_NOT_IN_GROUP":
 		return http.StatusNotFound, false
 	case "EXECUTOR_BUSY", "CARD_HELD", "STAFF_ALREADY_HOLDS_CARD", "CARD_IN_USE", "INSUFFICIENT_BALANCE",
 		"CARD_NOT_HELD", "CARD_BOUND_TO_ORDER", "ROOM_INACTIVE", "ROOM_IN_USE",
 		"GROUP_NOT_OPEN", "GROUP_HAS_UNSETTLED_MEMBERS", "GROUP_HAS_PAID_MEMBERS", "ORDER_SETTLED",
-		"STAFF_INACTIVE":
+		"STAFF_INACTIVE", "STAFF_CATEGORY_INACTIVE":
 		return http.StatusConflict, false
 	case "NO_PRIMARY_QUEUE", "INVALID_STATE", "EXECUTOR_NOT_FOUND", "SITE_NOT_FOUND", "QUEUE_NOT_FOUND", "AUDIT_ACTOR_MISSING":
 		return http.StatusBadRequest, false
@@ -92,6 +92,10 @@ var (
 	StaffNotQualified     = New("STAFF_NOT_QUALIFIED", "该服务员没有这项服务的资质")
 	StaffInactive         = New("STAFF_INACTIVE", "服务员已停用，不能执行服务")
 	OrderLineStaffMissing = New("ORDER_LINE_STAFF_REQUIRED", "服务明细尚未指定服务员")
+
+	// ADR-0024: staff categories are classification only, not qualification.
+	StaffCategoryNotFound = New("STAFF_CATEGORY_NOT_FOUND", "服务人员分类不存在或不属于本店")
+	StaffCategoryInactive = New("STAFF_CATEGORY_INACTIVE", "服务人员分类已停用，不能新绑定")
 )
 
 // FromPG maps PostgreSQL errors to the frozen contract without leaking text.

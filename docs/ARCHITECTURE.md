@@ -155,6 +155,7 @@ R0 引导骨架仅用标准库提供 `/health`，零外部依赖，作为 CI 基
 - [0021 · `price_adjustments` 更名 `order_price_adjustments`（第十三次受控扩展，修订 `00010`）](decisions/0021-rename-order-price-adjustments.md)
 - [0022 · 订单绑定卡 / 房间、结算自动释放卡与同行组合并 / 拆分（第十四次受控扩展，迁移 `00011`，schema 11）](decisions/0022-order-card-binding-and-companion-groups.md)
 - [0023 · 服务项资质与订单明细执行服务员（第十五次受控扩展，迁移 `00012`，schema 12）](decisions/0023-service-item-qualifications-and-line-staff.md)
+- [0024 · 服务人员分类与开单辅助选人（第十六次受控扩展，迁移 `00013`，schema 13）](decisions/0024-staff-categories-and-assisted-order-entry.md)
 
 后续选型在 `docs/decisions/` 下按 `NNNN-标题.md` 递增记录，模板：
 

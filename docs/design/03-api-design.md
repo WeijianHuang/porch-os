@@ -354,6 +354,19 @@
 | 限流 / 超时 | 同 §9：按主体 + 门店限流、5 s 超时；请求体受 1 MiB 上限约束 |
 | 不做 | 不锁库存、不校验余额 / 班次（属 `submit` 与支付事务职责）；不做会员价 / 时段价（另立 ADR） |
 
+## 11. ADR-0024 增补：分类端点与投影
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| GET | `/shops/{shopId}/staff-categories` | `queue.read` | 列出本店全部分类（含 `status`），按 `sort_order, code` 排序 |
+| POST | `/staff-categories` | `queue.write` | `{code,name,sort_order?}`；店内唯一，写带 `Idempotency-Key` |
+| PATCH | `/staff-categories/{categoryId}` | `queue.write` | `{name?,sort_order?,status?,version}`；停用只阻止新绑定 |
+| PATCH | `/staff/{staffId}` | `queue.write` | 增量 `category_public_id?: string \| null`，沿用 `version` 乐观锁 |
+| GET | `/staff` / `/staff/{staffId}` | `queue.read` | 增量 `category: {public_id,code,name} \| null` |
+| GET | `/catalog-items` | `catalog.read` | 增量 `category_public_id` / `category_name`（可空） |
+
+新增错误码：`STAFF_CATEGORY_NOT_FOUND`（404，分类不存在或跨店）、`STAFF_CATEGORY_INACTIVE`（409，分类停用不能新绑定）；重复 `code` / `name` 与并发修改沿用既有 409。开单辅助选人不新增端点，复用 `GET /staff`、`GET /catalog-items`、`GET /catalog-categories` 一次取回后前端筛选；服务端资质校验仍按 ADR-0023 返回 `STAFF_NOT_QUALIFIED`。
+
 ---
 
 下一册：[04 应用架构](04-application-architecture.md)。

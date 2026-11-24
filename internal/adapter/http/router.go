@@ -94,6 +94,10 @@ func NewRouter(store *postgres.Store, cfg config.Config) *gin.Engine {
 			// Single-member position shortcut (ADR-0015 §3.4).
 			one.POST("/queues/:queueId/staff/:staffId/move", h.MoveQueueStaff)
 
+			// Staff categories (ADR-0024): shop-scoped classification metadata.
+			one.GET("/staff-categories", h.ListStaffCategories)
+			one.POST("/staff-categories", h.CreateStaffCategory)
+			one.PATCH("/staff-categories/:categoryId", h.UpdateStaffCategory)
 			// GET /staff carries state + memberships for the staff wall.
 			one.GET("/staff", h.ListStaffSummaries)
 			one.POST("/staff", h.CreateStaff)

@@ -232,6 +232,12 @@ func (h *Handler) GetStaff(c *gin.Context) {
 		fail(c, pgErr(err))
 		return
 	}
+	category, err := h.Store.StaffCategoryForStaff(c.Request.Context(), nil, p.ShopID, v.ID)
+	if err != nil {
+		fail(c, pgErr(err))
+		return
+	}
+	v.Category = category
 	ok(c, 200, struct {
 		postgres.Staff
 		Queues         []qdomain.Ref `json:"queues"`
@@ -255,16 +261,17 @@ func (h *Handler) UpdateStaff(c *gin.Context) {
 		return
 	}
 	var req struct {
-		DisplayName *string `json:"display_name"`
-		Status      *string `json:"status"`
-		DutyStatus  *string `json:"duty_status"`
-		Version     int     `json:"version"`
+		DisplayName      *string `json:"display_name"`
+		Status           *string `json:"status"`
+		DutyStatus       *string `json:"duty_status"`
+		CategoryPublicID *string `json:"category_public_id"`
+		Version          int     `json:"version"`
 	}
 	if err := decode(c, &req); err != nil || req.Version < 0 {
 		badRequest(c, errors.New("version is required"))
 		return
 	}
-	if req.DisplayName == nil && req.Status == nil && req.DutyStatus == nil {
+	if req.DisplayName == nil && req.Status == nil && req.DutyStatus == nil && req.CategoryPublicID == nil {
 		badRequest(c, errors.New("at least one field is required"))
 		return
 	}
@@ -291,13 +298,47 @@ func (h *Handler) UpdateStaff(c *gin.Context) {
 		return
 	}
 	shopID, id := p.ShopID, existing.ID
+	var categoryID *int64
+	var newCategoryPublicID, oldCategoryPublicID string
+	if req.CategoryPublicID != nil {
+		oldCategory, err := h.Store.StaffCategoryForStaff(c.Request.Context(), nil, shopID, id)
+		if err != nil {
+			fail(c, pgErr(err))
+			return
+		}
+		if oldCategory != nil {
+			oldCategoryPublicID = oldCategory.PublicID
+		}
+		if *req.CategoryPublicID == "" {
+			categoryID = nil
+		} else {
+			category, err := h.Store.AssignableStaffCategory(c.Request.Context(), nil, shopID, *req.CategoryPublicID)
+			if err != nil {
+				fail(c, pgErr(err))
+				return
+			}
+			resolved, err := h.Store.StaffCategoryID(c.Request.Context(), nil, shopID, category.PublicID)
+			if err != nil {
+				fail(c, pgErr(err))
+				return
+			}
+			categoryID = &resolved
+			newCategoryPublicID = category.PublicID
+		}
+	}
 	h.runWrite(c, func(tx pgx.Tx) (int, any, error) {
-		v, err := h.Store.UpdateStaff(c.Request.Context(), tx, shopID, id, name, status, duty, req.Version)
+		v, err := h.Store.UpdateStaff(c.Request.Context(), tx, shopID, id, name, status, duty, categoryID, req.Version)
 		if postgres.IsNoRows(err) {
 			return 0, nil, apierrors.New("VERSION_CONFLICT", "并发冲突，请重读后重试")
 		}
 		if err != nil {
 			return 0, nil, pgErr(err)
+		}
+		if req.CategoryPublicID != nil {
+			if err := h.Store.RecordStaffCategoryChange(c.Request.Context(), tx, shopID, p.UserID,
+				existing.PublicID, oldCategoryPublicID, newCategoryPublicID); err != nil {
+				return 0, nil, pgErr(err)
+			}
 		}
 		return 200, h.envelope(c, v, nil), nil
 	})

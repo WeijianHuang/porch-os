@@ -32,18 +32,25 @@ type StaffSummary struct {
 const staffSummarySelect = `
 	SELECT st.public_id::text, st.code, st.display_name, st.status, st.duty_status,
 	       st.version, st.created_at, st.updated_at, st.id,
-	       st.executor_state, st.stop_rotation, COALESCE(pq.public_id::text,'')
+	       st.executor_state, st.stop_rotation, COALESCE(pq.public_id::text,''),
+	       sc.public_id::text, sc.code, sc.name
 	FROM staff st
-	LEFT JOIN queues pq ON pq.id = st.primary_queue_id AND pq.shop_id = st.shop_id`
+	LEFT JOIN queues pq ON pq.id = st.primary_queue_id AND pq.shop_id = st.shop_id
+	LEFT JOIN staff_categories sc ON sc.id = st.category_id AND sc.shop_id = st.shop_id`
 
 func scanStaffSummary(row pgx.Row) (StaffSummary, error) {
 	var v StaffSummary
+	var catPub, catCode, catName *string
 	err := row.Scan(&v.PublicID, &v.Code, &v.DisplayName, &v.Status, &v.DutyStatus,
 		&v.Version, &v.CreatedAt, &v.UpdatedAt, &v.ID,
-		&v.State, &v.StopRotation, &v.PrimaryQueueID)
+		&v.State, &v.StopRotation, &v.PrimaryQueueID,
+		&catPub, &catCode, &catName)
 	v.CreatedAt, v.UpdatedAt = utc(v.CreatedAt), utc(v.UpdatedAt)
 	v.Queues = []queue.StaffQueueRef{}
 	v.ServiceItemIDs = []string{}
+	if catPub != nil && catCode != nil && catName != nil {
+		v.Category = &StaffCategoryRef{PublicID: *catPub, Code: *catCode, Name: *catName}
+	}
 	return v, err
 }
 

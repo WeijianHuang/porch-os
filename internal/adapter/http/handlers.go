@@ -346,11 +346,12 @@ func (h *Handler) CreateCatalogItem(c *gin.Context) {
 		return
 	}
 	var req struct {
-		SKU             string `json:"sku"`
-		Name            string `json:"name"`
-		Type            string `json:"type"`
-		BasePrice       string `json:"base_price"`
-		DurationMinutes *int   `json:"duration_minutes"`
+		SKU              string  `json:"sku"`
+		Name             string  `json:"name"`
+		Type             string  `json:"type"`
+		BasePrice        string  `json:"base_price"`
+		DurationMinutes  *int    `json:"duration_minutes"`
+		CategoryPublicID *string `json:"category_public_id"`
 	}
 	if err := decode(c, &req); err != nil || req.SKU == "" || req.Name == "" {
 		badRequest(c, errors.New("sku and name are required"))
@@ -371,8 +372,17 @@ func (h *Handler) CreateCatalogItem(c *gin.Context) {
 		badRequest(c, err)
 		return
 	}
+	var categoryID *int64
+	if req.CategoryPublicID != nil {
+		id, err := h.Store.ResolveCatalogCategoryID(c.Request.Context(), nil, *req.CategoryPublicID)
+		if err != nil {
+			fail(c, pgErr(err))
+			return
+		}
+		categoryID = &id
+	}
 	h.runWrite(c, func(tx pgx.Tx) (int, any, error) {
-		v, err := h.Store.CreateCatalogItem(c.Request.Context(), tx, req.SKU, req.Name, req.Type, req.BasePrice, req.DurationMinutes)
+		v, err := h.Store.CreateCatalogItem(c.Request.Context(), tx, req.SKU, req.Name, req.Type, req.BasePrice, req.DurationMinutes, categoryID)
 		if err != nil {
 			return 0, nil, pgErr(err)
 		}
@@ -424,11 +434,12 @@ func (h *Handler) UpdateCatalogItem(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Name            string `json:"name"`
-		BasePrice       string `json:"base_price"`
-		Active          *bool  `json:"active"`
-		Version         int    `json:"version"`
-		DurationMinutes *int   `json:"duration_minutes"`
+		Name             string  `json:"name"`
+		BasePrice        string  `json:"base_price"`
+		Active           *bool   `json:"active"`
+		Version          int     `json:"version"`
+		DurationMinutes  *int    `json:"duration_minutes"`
+		CategoryPublicID *string `json:"category_public_id"`
 	}
 	if err := decode(c, &req); err != nil || req.Name == "" || req.Version < 0 {
 		badRequest(c, errors.New("name and version are required"))
@@ -450,8 +461,17 @@ func (h *Handler) UpdateCatalogItem(c *gin.Context) {
 	if req.Active != nil {
 		active = *req.Active
 	}
+	var categoryID *int64
+	if req.CategoryPublicID != nil {
+		id, err := h.Store.ResolveCatalogCategoryID(c.Request.Context(), nil, *req.CategoryPublicID)
+		if err != nil {
+			fail(c, pgErr(err))
+			return
+		}
+		categoryID = &id
+	}
 	h.runWrite(c, func(tx pgx.Tx) (int, any, error) {
-		v, err := h.Store.UpdateCatalogItem(c.Request.Context(), tx, itemID, req.Name, req.BasePrice, req.DurationMinutes, active, req.Version)
+		v, err := h.Store.UpdateCatalogItem(c.Request.Context(), tx, itemID, req.Name, req.BasePrice, req.DurationMinutes, categoryID, active, req.Version)
 		if postgres.IsNoRows(err) {
 			return 0, nil, apierrors.New("VERSION_CONFLICT", "并发冲突，请重读后重试")
 		}

@@ -131,10 +131,10 @@ cmd/porch-os/       早期零依赖引导程序（/health），CI 基线保留
 internal/           app 装配 · adapter/http 接口 · adapter/postgres 数据访问 · domain 领域 · platform 配置与错误 · security 令牌
 docs/               架构原则、详细设计、本地环境、决策记录
   ARCHITECTURE.md   隔离模型、分层、技术栈落地与稳健性原则
-  design/           前期详细设计 00–15（总览 / 领域 / 数据库 / 接口 / 应用架构 / 横切 / 流程 / 部署 / 审计 / 跨店差额 / 队列与服务人员 / 房间与楼层 / 多队列调度规则引擎 / 服务人员状态控制 / ID 卡与方形服务格子 / 服务类目录项时长）
+  design/           前期详细设计 00–16（总览 / 领域 / 数据库 / 接口 / 应用架构 / 横切 / 流程 / 部署 / 审计 / 跨店差额 / 队列与服务人员 / 房间与楼层 / 多队列调度规则引擎 / 服务人员状态控制 / ID 卡与方形服务格子 / 服务类目录项时长 / 开单收银工作台）
   LOCAL-DEV.md      本地 PostgreSQL 启动、验证与重置
-  decisions/        ADR：0001 数据库、0002 后端技术栈、0003 仅门店层隔离、0004 范围基线、0005 取消门店组、0006 用户-门店关系与切换、0007 剩余开放问题决议、0008 设计冻结与运行基线、0009 队列与服务人员、0010 在岗状态与队列顺序、0011 房间与楼层、0012 多队列调度规则引擎、0013 收款与退款归属、0014 金额派生与退款渠道、0015 服务人员状态控制、0016 充值退款与券口径、0017 ID 卡、0018 服务时长
-migrations/         goose 迁移：0001 初始化 schema、0002 RBAC 基线、0003 队列与服务人员、0004 队列服务人员权限、0005 在岗状态与队列顺序、0006 房间与楼层、0007 多队列调度规则引擎、0008 ID 卡、0009 服务时长、0010 R3 订单域、0011 订单卡 / 房间与同行组、0012 服务项资质与明细执行服务员
+  decisions/        ADR：0001 数据库、0002 后端技术栈、0003 仅门店层隔离、0004 范围基线、0005 取消门店组、0006 用户-门店关系与切换、0007 剩余开放问题决议、0008 设计冻结与运行基线、0009 队列与服务人员、0010 在岗状态与队列顺序、0011 房间与楼层、0012 多队列调度规则引擎、0013 收款与退款归属、0014 金额派生与退款渠道、0015 服务人员状态控制、0016 充值退款与券口径、0017 ID 卡、0018 服务时长、0019 试价、0020 让利结构化、0021 金额调整更名、0022 订单卡 / 房间与同行组、0023 服务资质与明细执行人、0024 服务人员分类与辅助选人
+migrations/         goose 迁移：0001 初始化 schema、0002 RBAC 基线、0003 队列与服务人员、0004 队列服务人员权限、0005 在岗状态与队列顺序、0006 房间与楼层、0007 多队列调度规则引擎、0008 ID 卡、0009 服务时长、0010 R3 订单域、0011 订单卡 / 房间与同行组、0012 服务项资质与明细执行服务员、0013 服务人员分类与目录项分组
 go.mod              Go 模块定义（go 1.25；已引入 Gin / pgx / goose 等首批依赖）
 docker-compose.yml  本地数据库（PostgreSQL 18.7）
 .env.example        配置占位（仅示例值）
@@ -149,7 +149,7 @@ CHANGELOG.md        变更记录
 Prerequisites: Go 1.25+ (matching `go.mod`) and a running PostgreSQL 18.7 (`docker compose up -d db`).
 
 ```bash
-cp .env.example .env          # set DATABASE_URL / JWT_SECRET / EXPECTED_SCHEMA_VERSION=11
+cp .env.example .env          # set DATABASE_URL / JWT_SECRET / EXPECTED_SCHEMA_VERSION=13
 go run ./cmd/job migrate      # the ONLY process allowed to change the schema
 SEED_LOGIN=admin SEED_PASSWORD=<local-password> go run ./cmd/job seed-user
 go run ./cmd/api              # /health and /ready on PORT (default 8080)
@@ -199,6 +199,7 @@ nor `worker` runs migrations at startup.
 | `docs/decisions/0021-rename-order-price-adjustments.md` | `price_adjustments` 更名为 `order_price_adjustments`（含约束名，第十三次受控扩展；历史 ADR 旧名别名映射） |
 | `docs/decisions/0022-order-card-binding-and-companion-groups.md` | 订单绑定 ID 卡（`orders.card_id` + 释放时间 / 原因，结算 / 取消自动释放订单与持卡两层）与房间（`orders.room_id`，提交前必填）、同行组（`companion_groups` / 成员表，多单成组共同结算、可合并 / 拆分、付款仍逐单）；第十四次受控扩展，迁移 `00011`，schema 11；修订 ADR-0017 / ADR-0011 相关边界 |
 | `docs/decisions/0023-service-item-qualifications-and-line-staff.md` | 服务员 ↔ 服务目录项资质关系（`staff_service_items`）与明细级执行人（`order_lines.staff_id` + `staff_name_snapshot`）；服务行提交前必填、商品行不绑定，删人保留快照；第十五次受控扩展，迁移 `00012`，schema 12 |
+| `docs/decisions/0024-staff-categories-and-assisted-order-entry.md` | 店内服务人员分类（`staff_categories` + `staff.category_id`，一人最多一类）与目录项分组（`catalog_items.category_id`）；开单弹窗「添加服务员」按分类 / 状态选人后连续添加服务项；第十六次受控扩展，迁移 `00013`，schema 13 |
 | `docs/decisions/0008-design-freeze-and-nq-resolutions.md` | NQ-01–16 全部决议、DP-01–07 接受、详细设计冻结、R1 范围与验收、Docker 2+2 / Go Job / 连接池 / 审计 / 容量基线 |
 | `CONTRIBUTING.md` | 分支、提交与 PR 约定 |
 | `CHANGELOG.md` | 变更记录 |

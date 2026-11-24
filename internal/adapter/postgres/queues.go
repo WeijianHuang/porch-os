@@ -23,15 +23,16 @@ type Queue struct {
 
 // Staff is a flat shop-scoped DTO.
 type Staff struct {
-	PublicID    string    `json:"public_id"`
-	Code        string    `json:"code"`
-	DisplayName string    `json:"display_name"`
-	Status      string    `json:"status"`
-	DutyStatus  string    `json:"duty_status"`
-	Version     int       `json:"version"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	ID          int64     `json:"-"`
+	PublicID    string            `json:"public_id"`
+	Code        string            `json:"code"`
+	DisplayName string            `json:"display_name"`
+	Status      string            `json:"status"`
+	DutyStatus  string            `json:"duty_status"`
+	Version     int               `json:"version"`
+	CreatedAt   time.Time         `json:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
+	Category    *StaffCategoryRef `json:"category"`
+	ID          int64             `json:"-"`
 }
 
 const queueCols = "public_id::text, seq, name, status, version, created_at, updated_at, id"
@@ -134,10 +135,15 @@ func (s *Store) CreateStaff(ctx context.Context, tx pgx.Tx, shopID int64, code, 
 	return scanStaff(tx.QueryRow(ctx, `SELECT `+staffCols+` FROM staff WHERE id=$1`, id))
 }
 
-func (s *Store) UpdateStaff(ctx context.Context, tx pgx.Tx, shopID, id int64, displayName, status, dutyStatus string, version int) (Staff, error) {
+func (s *Store) UpdateStaff(
+	ctx context.Context, tx pgx.Tx, shopID, id int64,
+	displayName, status, dutyStatus string, categoryID *int64, version int,
+) (Staff, error) {
 	tag, err := tx.Exec(ctx, `
-		UPDATE staff SET display_name=$3, status=$4, duty_status=$5, version=version+1, updated_at=now()
-		WHERE id=$1 AND shop_id=$2 AND version=$6`, id, shopID, displayName, status, dutyStatus, version)
+		UPDATE staff SET display_name=$3, status=$4, duty_status=$5, category_id=$6,
+		  version=version+1, updated_at=now()
+		WHERE id=$1 AND shop_id=$2 AND version=$7`,
+		id, shopID, displayName, status, dutyStatus, categoryID, version)
 	if err != nil {
 		return Staff{}, err
 	}

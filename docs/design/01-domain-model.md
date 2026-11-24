@@ -186,6 +186,13 @@ Porch OS 只提供**通用多店经营底座**，不内置任何行业专属规�
 12. 所有写操作在线同步完成；不存在本地队列、离线单据或补传合并路径（ADR-0004）。
 13. 一个用户可关联多间门店（`user_shops` 多对多），但当前门店必须显式携带且只是请求期上下文：不落库、不进 JWT、不作为授权来源；不设 `users.shop_id` / `shops.owner_user_id` / 切换端点（ADR-0006）。
 
+## 10. ADR-0024 增补：服务人员分类与目录项分组
+
+- `StaffCategory` 是店内 B 类值对象：`public_id` / `code` / `name` / `sort_order` / `status` / `version`，必须带 `shop_id`；与 `Staff` 是 1:N，`Staff.category` 可空、最多一个分类，重新绑定即替换。
+- 分类**不是**资质（ADR-0023）、权限（RBAC）或调度状态（ADR-0015）：只用于筛选与展示。服务端不会因分类而放宽 `staff_service_items` 校验。
+- `CatalogItem.category` 可空，指向全局 `catalog_categories`（A 类），只用于开单选人弹窗分组；不改变 `type` / `duration_minutes` / 价格派生。
+- 不变量增补：任何服务人员都不能挂两个分类；跨店分类赋值必须被复合外键拒绝；停用的分类不可新绑定，但已绑定关系保留。
+
 ---
 
 下一册：[02 数据库设计](02-database-design.md) 把这些不变量落成表、索引与唯一约束。

@@ -573,6 +573,13 @@ $$;
 
 集成测试用**真实 PG 18.7**，不 mock 数据访问层（ADR-0002 阻断项 ⑨）。起库支持两种并列模式，按开发者环境任选：① `testcontainers-go` 由测试进程自起容器（本机有 Go + Unix socket / CI）；② compose 组网（`docker compose up -d db` + `TEST_DATABASE_URL`，适合全 Docker / Windows Docker Desktop）。两者共用同一套用例，差异仅在如何取得连接串——测试代码统一从辅助函数读取（有环境变量则直连，否则回退 testcontainers），详见 [ADR-0002](../decisions/0002-go-backend-stack.md)「集成测试的两种模式」。
 
+## 9. ADR-0024 增补：迁移 `00013`（schema 12 → 13）
+
+- 新增 `staff_categories`：`id` / `public_id` / `shop_id` / `code` / `name` / `sort_order` / `status` / `created_at` / `updated_at` / `version`；`UNIQUE(public_id)`、`UNIQUE(shop_id, code)`、`UNIQUE(shop_id, name)`、`UNIQUE(shop_id, id)`，`status IN ('active','inactive')`，索引 `(shop_id, status, sort_order, code)`。
+- `staff` 增可空 `category_id`，`FOREIGN KEY (shop_id, category_id) REFERENCES staff_categories (shop_id, id)`，部分索引 `(shop_id, category_id) WHERE category_id IS NOT NULL`。
+- `catalog_items` 增可空 `category_id REFERENCES catalog_categories(id)`，部分索引 `(category_id) WHERE category_id IS NOT NULL`；只用于选人弹窗分组，不扩张目录分类维护面。
+- `Down`：先 drop 两个新索引与 `staff.category_id` 约束 / 列、`catalog_items.category_id` 列，再 drop `staff_categories` 表。存量数据两列均为 NULL，无需回填。
+
 ---
 
 下一册：[03 接口设计](03-api-design.md)。

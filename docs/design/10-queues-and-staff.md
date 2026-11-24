@@ -155,4 +155,8 @@ CREATE INDEX idx_queue_staff_shop_staff ON queue_staff (shop_id, staff_id, queue
 
 只用通用词 `queue` / `staff` / `duty_status` / `position`；不含排队号、叫号、业绩绩效、考勤流水、排班、小票等业务规则。与既有冻结契约一致：单币种 CNY、UTC+8（时间字段 `timestamptz` / UTC 传输）、不归档、不打印、不离线、无门店组、无 tenant、当前门店请求期上下文。
 
+## 9. ADR-0024 增补：服务人员分类
+
+`staff_categories` 是店内分类定义（`shop_id` + `code` / `name` 店内唯一），`staff.category_id` 为可空标量外键，一人最多一个分类；复合外键 `(shop_id, category_id)` 在数据库层禁止跨店绑定。分类只用于开单选人筛选与卡片展示，不授予服务能力、不参与 RBAC、不驱动派单；能力仍看 `staff_service_items`（ADR-0023），状态仍看 `duty_status` / `executor_state`（ADR-0010 / 0012 / 0015）。`GET/POST/PATCH /staff-categories` 用 `queue.read` / `queue.write`，写带幂等键与审计；`PATCH /staff/{staffId}` 增 `category_public_id` 可清空；`GET /staff` 与详情增 `category` 投影。停用分类只阻止新绑定，不回写已有服务员。
+
 返回 [00 总览](00-overview.md) 查看完整分册地图与已关闭的 OQ / NQ 清单。
