@@ -148,6 +148,13 @@ func (s *Store) UpdateStaff(ctx context.Context, tx pgx.Tx, shopID, id int64, di
 }
 
 func (s *Store) DeleteStaff(ctx context.Context, tx pgx.Tx, shopID, id int64) error {
+	// ADR-0023: clear the live link on order lines but keep the name snapshot,
+	// so historical orders stay readable. Unsubmitted service lines will need
+	// a new executor before they can be submitted. Same transaction as delete.
+	if _, err := tx.Exec(ctx, `
+		UPDATE order_lines SET staff_id=NULL WHERE shop_id=$1 AND staff_id=$2`, shopID, id); err != nil {
+		return err
+	}
 	_, err := tx.Exec(ctx, `DELETE FROM staff WHERE id=$1 AND shop_id=$2`, id, shopID)
 	return err
 }

@@ -47,10 +47,13 @@ Client ──► API 中间件 ──► Usecase ──► Domain(纯函数) ─
 2. 领域纯函数算 `unit_price`、`amount`，把下单时的名称与价格**快照**进明细。
 3. 事务：乐观锁更新 `orders(version)`、`INSERT order_lines`、写幂等记录。
 4. 冲突 → `409 VERSION_CONFLICT`（可重试）：客户端重读后复用同一幂等键重试。
+5. **ADR-0023 增量**：查询目录项时同时取 `type`；服务行可带 `staff_public_id`，写入前查资质（`staff_service_items`）与任职状态，商品行携带人员 → `400`。服务行暂不带人允许建草稿，必填在阶段 C 判定；落库时一并快照 `staff_name_snapshot`。改派走 `PUT /orders/{id}/lines/{lineNo}/staff`，同事务递增订单 `version`。
 
 > **收银实时试价（ADR-0019）**：收银机增减项时前端调 `POST /shops/{shopId}/orders/price` 刷新应付与优惠分摊。该端点只读、不落库、不占单号、无需幂等键；服务端按 `COALESCE(shop_catalog_overrides.price, catalog_items.base_price)` 取价（覆盖价优先，下架项拒绝），与步骤 2 的加项快照同口径，返回逐行 `unit_price` / `amount` / `allocated_adjustment` / `line_total` 与 `subtotal` / `discount_amount` / `total_amount`。前端据此展示，最终提交仍以本阶段落库的快照价为准。
 
 ### 阶段 C｜提交结账 `open → pending_payment`
+
+**ADR-0023 增量前置校验**（与 ADR-0022 的卡 / 房间校验并列，同事务、在 `Quote` 重算之前）：逐条检查 `type='service'` 的明细——无 `staff_id` → `422 ORDER_LINE_STAFF_REQUIRED`（`details.line_no`）；人员 `inactive` → `409 STAFF_INACTIVE`；资质已撤销 → `422 STAFF_NOT_QUALIFIED`。商品行不参与；不静默改派，决定权交还操作员。
 
 | 步 | 动作 |
 |---|---|

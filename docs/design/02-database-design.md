@@ -57,7 +57,8 @@
 | member | `member_visits` | B | 到店记录 | `(shop_id, public_id)` |
 | order | `shifts` | B | 收银班次（`public_id` 供 `/shifts/{id}/close` 对外使用，迁移 `00010`） | `(shop_id, shift_no)` / `public_id`；部分唯一：一店最多一个 `open` |
 | order | `orders` | B | 单据；每张单最多绑一张 ID 卡与一个房间（`card_id` / `room_id`，复合外键锁同店）；卡绑定用 `card_released_at` 标记有效 / 释放，结算 / 取消自动释放（ADR-0022） | **`(shop_id, order_no)` 店内唯一**；部分唯一 `(shop_id, card_id) WHERE card_id IS NOT NULL AND card_released_at IS NULL` |
-| order | `order_lines` | B | 单据明细（价格快照） | `(shop_id, order_id, line_no)` |
+| order | `order_lines` | B | 单据明细（价格快照）；服务行带 `staff_id` + `staff_name_snapshot`（ADR-0023），商品行不绑定 | `(shop_id, order_id, line_no)` |
+| queue | `staff_service_items` | B | 服务员 ↔ 服务目录项的资质关系（ADR-0023，仅 `type='service'`；复合外键锁服务员同店） | `(staff_id, catalog_item_id)` / `(shop_id, catalog_item_id)` |
 | order（[ADR-0022](../decisions/0022-order-card-binding-and-companion-groups.md)） | `companion_groups` | B | 同行组：多张各自绑卡的单据组成一组共同结算；`status` = `open`/`closed`/`cancelled`；不存金额 | `(shop_id, id)` / `public_id` |
 | order | `companion_group_members` | B | 同行组成员（`left_at` 留拆出历史；一单同一时刻只属一个 open 组） | 部分唯一 `(shop_id, order_id) WHERE left_at IS NULL` |
 | order | `order_price_adjustments` | B | 整单让利（`type` 区分券 / 活动 / 抹零 / 手工 / 其他；`title` 账单短标题、`description` 详细原因；券以 `source_id` 预留追溯锚点，ADR-0020；已分摊到行）。**专属于 Order 聚合**：`order_id NOT NULL` + 复合外键钉死订单与同店，无其他业务使用者；充值赠送走 `balance_ledger`，非同构让利另立新表，禁止改成多态关联（见 ADR-0020「表的适用边界」） | `(shop_id, order_id, seq)` |
@@ -228,6 +229,31 @@ CREATE TABLE order_lines (
   CONSTRAINT ck_order_lines_amount CHECK (amount >= 0)
 );
 CREATE INDEX idx_order_lines_shop_order ON order_lines (shop_id, order_id);
+
+-- ADR-0023（迁移 00012）：资质关系 + 明细级执行服务员。目录项全局、服务员店内，
+-- 关联表带 shop_id 并用 (shop_id, staff_id) 复合外键锁同店；一服务行一人，快照姓名留史。
+CREATE TABLE staff_service_items (
+  shop_id         bigint      NOT NULL,
+  staff_id        bigint      NOT NULL,
+  catalog_item_id bigint      NOT NULL REFERENCES catalog_items(id),
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (staff_id, catalog_item_id),
+  CONSTRAINT fk_staff_service_items_staff FOREIGN KEY (shop_id, staff_id)
+    REFERENCES staff (shop_id, id) ON DELETE CASCADE
+);
+CREATE INDEX idx_staff_service_items_shop_item ON staff_service_items (shop_id, catalog_item_id);
+
+ALTER TABLE order_lines
+  ADD COLUMN staff_id            bigint,
+  ADD COLUMN staff_name_snapshot text,
+  ADD CONSTRAINT fk_order_lines_staff FOREIGN KEY (shop_id, staff_id)
+    REFERENCES staff (shop_id, id),
+  ADD CONSTRAINT ck_order_lines_staff_snapshot CHECK (
+    staff_id IS NULL OR staff_name_snapshot IS NOT NULL
+  );
+CREATE INDEX idx_order_lines_shop_staff ON order_lines (shop_id, staff_id)
+  WHERE staff_id IS NOT NULL;
+-- 注：catalog_items.type='service' 无法跨表 CHECK，由服务端在授予 / 指定 / 提交三处校验。
 
 -- 同行组：多张各自绑卡的单据组成一组共同结算（ADR-0022）；不存金额，只做编排与派生合计
 -- status: open（可合并 / 拆分）→ closed（结算完毕或成员清空）/ cancelled（无成功支付时人工放弃）

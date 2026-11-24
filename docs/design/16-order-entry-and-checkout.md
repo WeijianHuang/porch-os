@@ -1,6 +1,6 @@
 # 16 · 开单收银工作台功能分析与设计
 
-> 上游：[ADR-0002](../decisions/0002-go-backend-stack.md)（SQL 优先、领域纯函数）、[ADR-0003](../decisions/0003-shop-level-isolation.md)（仅 `shop_id` 隔离）、[ADR-0004](../decisions/0004-scope-baseline.md)（单币种 CNY / 东八区 / 不打印 / 不离线）、[ADR-0006](../decisions/0006-user-shops-and-current-shop.md)（当前门店请求期上下文）、[ADR-0011](../decisions/0011-rooms-and-floors.md)（房间）、[ADR-0013](../decisions/0013-payment-and-refund-ownership.md)、[ADR-0014](../decisions/0014-derived-amounts-and-refund-entries.md)、[ADR-0016](../decisions/0016-refund-source-and-topup-reversal.md)（支付 / 派生金额 / 退款）、[ADR-0017](../decisions/0017-id-cards-and-square-slots.md)（ID 卡与剩余分钟预留）、[ADR-0018](../decisions/0018-service-duration.md)（服务标称时长）、[ADR-0019](../decisions/0019-order-price-preview.md)（实时试价）、[ADR-0020](../decisions/0020-structured-price-adjustments.md)（结构化让利）、[ADR-0021](../decisions/0021-rename-order-price-adjustments.md)（让利表名）、[ADR-0022](../decisions/0022-order-card-binding-and-companion-groups.md)（订单绑定卡 / 房间、同行组、结算自动释放卡）。
+> 上游：[ADR-0002](../decisions/0002-go-backend-stack.md)（SQL 优先、领域纯函数）、[ADR-0003](../decisions/0003-shop-level-isolation.md)（仅 `shop_id` 隔离）、[ADR-0004](../decisions/0004-scope-baseline.md)（单币种 CNY / 东八区 / 不打印 / 不离线）、[ADR-0006](../decisions/0006-user-shops-and-current-shop.md)（当前门店请求期上下文）、[ADR-0011](../decisions/0011-rooms-and-floors.md)（房间）、[ADR-0013](../decisions/0013-payment-and-refund-ownership.md)、[ADR-0014](../decisions/0014-derived-amounts-and-refund-entries.md)、[ADR-0016](../decisions/0016-refund-source-and-topup-reversal.md)（支付 / 派生金额 / 退款）、[ADR-0017](../decisions/0017-id-cards-and-square-slots.md)（ID 卡与剩余分钟预留）、[ADR-0018](../decisions/0018-service-duration.md)（服务标称时长）、[ADR-0019](../decisions/0019-order-price-preview.md)（实时试价）、[ADR-0020](../decisions/0020-structured-price-adjustments.md)（结构化让利）、[ADR-0021](../decisions/0021-rename-order-price-adjustments.md)（让利表名）、[ADR-0022](../decisions/0022-order-card-binding-and-companion-groups.md)（订单绑定卡 / 房间、同行组、结算自动释放卡）、[ADR-0023](../decisions/0023-service-item-qualifications-and-line-staff.md)（服务项资质与明细执行服务员）。
 >
 > **本册性质**：对一张既有开单收银界面原型做功能分解，并给出与已冻结订单契约的映射方案。本册**不新增任何契约**：凡现有 ADR / `00`–`15` 已定的 schema、端点、状态机、金额口径一律沿用；凡原型里有而契约未覆盖的能力，一律标注「本期不做 / 需另立 ADR」，**不得据此直接改代码**。全文按脱钩规则只用通用术语。
 
@@ -8,7 +8,7 @@
 
 原型是一张单页收银工作台，共 8 个区域。下表按区域列出可观察元素与语义（行业专属称谓已通用化，见第 2 节）。
 
-> **语义澄清（业务确认）**：初版本册曾把「同行」误读为「多张 ID 卡绑定到同一订单」，那是错误的。正确语义是——**一个订单绑定一张 ID 卡（1:1）与一个房间**；「同行」是把**多个各自已绑卡的单据**关联成一组，一起买单结算，组内**可合并、可拆分**。合并 / 拆分只改变单据的分组归属，**不改变「一张 ID 卡在同一时刻只对应一个订单」的约束**。另经确认：**结算结清后必须自动释放卡**（同时结束订单绑定与人员持卡关系，卡立即可复用），取消单同样释放。相关契约已由 [ADR-0022](../decisions/0022-order-card-binding-and-companion-groups.md) 接受（迁移 `00011`，schema 11），§8 P1 / P2 / P8 不再是「待 ADR」，下文历史描述中的「本期不做 / 待 ADR」以 ADR-0022 为准。
+> **语义澄清（业务确认）**：初版本册曾把「同行」误读为「多张 ID 卡绑定到同一订单」，那是错误的。正确语义是——**一个订单绑定一张 ID 卡（1:1）与一个房间**；「同行」是把**多个各自已绑卡的单据**关联成一组，一起买单结算，组内**可合并、可拆分**。合并 / 拆分只改变单据的分组归属，**不改变「一张 ID 卡在同一时刻只对应一个订单」的约束**。另经确认：**结算结清后必须自动释放卡**（同时结束订单绑定与人员持卡关系，卡立即可复用），取消单同样释放。相关契约已由 [ADR-0022](../decisions/0022-order-card-binding-and-companion-groups.md) 接受（迁移 `00011`，schema 11），§8 P1 / P2 / P8 不再是「待 ADR」，下文历史描述中的「本期不做 / 待 ADR」以 ADR-0022 为准。另经业务确认：**服务员有两层关系**——维护「可做哪些服务项」的资质，并在每条服务明细上记录实际执行人；服务明细提交前必须有合格服务员。该契约由 [ADR-0023](../decisions/0023-service-item-qualifications-and-line-staff.md) 接受（迁移 `00012`，schema 12），§8 P3 已不再「不做」。
 
 | 区域 | 可见元素 | 语义（通用化） |
 |---|---|---|
@@ -83,10 +83,11 @@
 | 订单备注 | `orders` 无 `note` 字段 | 本期保留前端草稿备注但不落库；持久化见 §8 P6 |
 | 8 种收款方式 | 后端只有 3 个渠道 | 按 §5 收敛；第三方渠道本期不接（NQ-15） |
 | 更换房间 | 房间实体存在，`orders` 无 `room_id` | **ADR-0022 已接受**：`POST /orders/{id}/room` 写库；开单时也可带 `room_public_id`（§8 P1） |
+| 服务人员绑定服务项 / 明细执行人 | `staff` 无资质关系、`order_lines` 无 `staff_id` | **ADR-0023 已接受**：`staff_service_items` 资质表 + `order_lines.staff_id` / `staff_name_snapshot`；服务行提交前必填，商品行不绑定（§8 P3） |
 
 ### 3.3 本期明确不做（须另立 ADR，未接受不改代码）
 
-服务计时实例（开始 / 结束 / 加时）、业绩归属、订单备注持久化、订单绑定服务人员、第三方支付渠道接入、离线收银（ADR-0004）、打印（ADR-0004）。逐项动机与代价见 §8。**订单绑定 ID 卡 / 房间与同行组已由 ADR-0022 接受，不再属于「本期不做」**；服务人员绑定仍未做。
+服务计时实例（开始 / 结束 / 加时）、业绩归属、订单备注持久化、第三方支付渠道接入、离线收银（ADR-0004）、打印（ADR-0004）。逐项动机与代价见 §8。**订单绑定 ID 卡 / 房间与同行组已由 ADR-0022 接受，订单明细执行服务员与服务项资质已由 ADR-0023 接受，均不再属于「本期不做」**。
 
 ## 4. 已覆盖能力的落地设计
 
@@ -105,8 +106,11 @@
 选服务项 / 产品 → POST /orders/{id}/lines  （行快照，本店覆盖价优先）
 每次增减行     → POST /orders/price          （只读试价，刷新 R5）
 调整让利       → 本地维护 adjustments[]，再试价
+选服务项 / 产品 → POST /orders/{id}/lines  （服务行可带 staff_public_id，需有资质；商品行不带）
+改派服务人员   → PUT /orders/{id}/lines/{lineNo}/staff {staff_public_id|null}
 点「开单」     → POST /orders/{id}/submit {version, total_amount, adjustments[]}
-              → 前置：必须已绑卡且已绑房，否则 422 ORDER_CARD_REQUIRED / ORDER_ROOM_REQUIRED
+              → 前置：必须已绑卡、已绑房，且每条服务明细已有合格执行人；
+                否则 422 ORDER_CARD_REQUIRED / ORDER_ROOM_REQUIRED / ORDER_LINE_STAFF_REQUIRED
 设置同行       → POST /companion-groups     +  POST /companion-groups/{gid}/members {order_public_ids[]}
               → 多单成组共同结算；组内可 POST/DELETE .../members 合并 / 拆分（ADR-0022）
 点「收款」     → POST /orders/{id}/payments {entries[]}   （逐单付款，组不代收）
@@ -199,7 +203,7 @@
 | 房间（落单） | `rooms` / `orders.room_id`（ADR-0022） | 复合外键锁同店；提交结账前必填，不落快照；**同房可同时多单、不做互斥** |
 | ID 卡（一单一卡） | `id_cards` / `card_holdings` / `orders.card_id` + `card_released_at/reason`（ADR-0022） | 1:1 有效绑定 + 部分唯一；同房多单各绑各的卡；结清 / 取消自动释放两层绑定 |
 | 同行组（多单共同结算） | `companion_groups` / `companion_group_members`（ADR-0022） | 分开买单 = 各单独立支付；合并买单 = 多单入同一组同屏结算；组不存金额、付款仍逐单 |
-| 服务人员（上下文） | `staff` | `order_lines` 无 `staff_id` |
+| 服务人员（上下文 / 执行人） | `staff` / `staff_service_items` / `order_lines.staff_id` + `staff_name_snapshot`（ADR-0023） | 资质按服务项维护；服务行一人、商品行不绑；缺人提交 `422 ORDER_LINE_STAFF_REQUIRED` |
 | 服务开始 / 剩余分钟 | 无 | 未建模，恒「—」 |
 | 业绩归属 | 无 | 未建模 |
 | 订单备注 | 无 | 未建模 |
@@ -225,15 +229,16 @@
 4. 幂等重放不重复收款；`version` 冲突有明确重取路径。
 5. 剩余分钟恒显示「—」；计时方式 / 开始时刻 / 业绩归属 / 备注不落库（本期）。
 6. 无卡 / 无房间提交被拒（`422 ORDER_CARD_REQUIRED` / `ORDER_ROOM_REQUIRED`）；结清后订单 `card` 为 null、`card_binding_history` 保留，卡可被他人领取。
-7. 越店请求 403、缺 `X-Shop-Id` 400；`/ready` schema_version 随 ADR-0022 升为 **11**（此前为 10）。
+7. 越店请求 403、缺 `X-Shop-Id` 400；`/ready` schema_version 随 ADR-0022 升为 11、随 ADR-0023 升为 **12**。
+8. 服务明细有合格执行人才能提交（缺人 / 无资质 / 停用分别 `422` / `422` / `409`），商品明细无人员约束；一单两条服务明细可指定两位不同服务员；删人后历史单仍显示快照姓名。
 
-## 8. 提案台账（P1 / P2 / P8 已由 ADR-0022 接受；其余未接受）
+## 8. 提案台账（P1 / P2 / P8 已由 ADR-0022 接受；P3 由 ADR-0023 接受；其余未接受）
 
 | 编号 | 提案 | 动机 | 代价 / 影响 | 本期结论 |
 |---|---|---|---|---|
 | ~~P1~~ | ~~订单绑定房间（`orders.room_id`，店内 FK 到 `rooms`）~~ | 工作台顶部房间上下文落单 | — | **已接受**（ADR-0022，迁移 `00011`，schema 11）；提交结账前必填，删除被引用房间 `409 ROOM_IN_USE` |
 | ~~P2~~ | ~~订单绑定 ID 卡（`orders.card_id`，1:1）~~ | 一单一卡 | — | **已接受**（ADR-0022，迁移 `00011`，schema 11）；实现见 `design/02`/`03`/`06` F-09 |
-| P3 | `order_lines.staff_id`（店内 FK 到 `staff`） | 明细级服务人员归属 | 改 schema、影响删除人员时的历史单可读性（需快照名） | 不做；人员仅草稿 |
+| ~~P3~~ | ~~`order_lines.staff_id`（店内 FK 到 `staff`）~~ | 明细级服务人员归属 | — | **已接受**（ADR-0023，迁移 `00012`，schema 12）；另增 `staff_service_items` 资质关系 + `staff_name_snapshot` 快照名，服务行提交前必填、商品行不绑 |
 | P4 | 服务计时实例（开始 / 结束 / 加时 / 计时方式） | 计时服务与剩余分钟真实计算 | 新建计时域、状态机、与目录 `duration_minutes` 的关系；原型已有负剩余缺陷 | 不做；剩余分钟恒「—」（ADR-0017） |
 | P5 | 业绩归属人 | 业绩统计 | 引入归属规则与绩效口径，属行业专属 | 不做 |
 | P6 | `orders.note` 备注 | 备注持久化 | 小字段但改 schema，且需定义是否随退款 / 审计 | 不做；草稿临时保留 |

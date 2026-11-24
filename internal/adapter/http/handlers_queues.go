@@ -226,10 +226,17 @@ func (h *Handler) GetStaff(c *gin.Context) {
 	if queues == nil {
 		queues = []qdomain.Ref{}
 	}
+	// ADR-0023: the detail view also carries the qualified service items.
+	qualified, err := h.Store.ServiceItemIDs(c.Request.Context(), nil, p.ShopID, v.ID)
+	if err != nil {
+		fail(c, pgErr(err))
+		return
+	}
 	ok(c, 200, struct {
 		postgres.Staff
-		Queues []qdomain.Ref `json:"queues"`
-	}{Staff: v, Queues: queues}, nil)
+		Queues         []qdomain.Ref `json:"queues"`
+		ServiceItemIDs []string      `json:"service_item_ids"`
+	}{Staff: v, Queues: queues, ServiceItemIDs: qualified}, nil)
 }
 
 func (h *Handler) UpdateStaff(c *gin.Context) {

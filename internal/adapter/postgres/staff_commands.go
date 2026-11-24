@@ -25,6 +25,8 @@ type StaffSummary struct {
 	// ADR-0017: current card and the reserved order-domain remaining minutes.
 	IDCard                  *CardRef `json:"id_card"`
 	ServiceRemainingMinutes *int     `json:"service_remaining_minutes"`
+	// ADR-0023: qualified service catalog items (public_ids).
+	ServiceItemIDs []string `json:"service_item_ids"`
 }
 
 const staffSummarySelect = `
@@ -41,6 +43,7 @@ func scanStaffSummary(row pgx.Row) (StaffSummary, error) {
 		&v.State, &v.StopRotation, &v.PrimaryQueueID)
 	v.CreatedAt, v.UpdatedAt = utc(v.CreatedAt), utc(v.UpdatedAt)
 	v.Queues = []queue.StaffQueueRef{}
+	v.ServiceItemIDs = []string{}
 	return v, err
 }
 
@@ -88,6 +91,15 @@ func (s *Store) ListStaffSummaries(ctx context.Context, q DBTX, shopID int64) ([
 			out[i].IDCard = &ref
 		}
 	}
+	qualified, err := s.ServiceItemsByStaff(ctx, q, shopID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if list, ok := qualified[out[i].PublicID]; ok {
+			out[i].ServiceItemIDs = list
+		}
+	}
 	return out, nil
 }
 
@@ -108,6 +120,11 @@ func (s *Store) StaffSummaryByPublicID(ctx context.Context, q DBTX, shopID int64
 	if list, ok := queue.MembershipsByStaff(memberships)[v.PublicID]; ok {
 		v.Queues = list
 	}
+	qualified, err := s.ServiceItemIDs(ctx, q, shopID, v.ID)
+	if err != nil {
+		return StaffSummary{}, err
+	}
+	v.ServiceItemIDs = qualified
 	return v, nil
 }
 

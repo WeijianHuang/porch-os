@@ -103,6 +103,9 @@ func NewRouter(store *postgres.Store, cfg config.Config) *gin.Engine {
 			// Operator controls on scheduling state / rotation (ADR-0015).
 			one.POST("/staff/:staffId/state", h.SetStaffState)
 			one.PATCH("/staff/:staffId/rotation", h.SetStaffRotation)
+			// Service-item qualifications (ADR-0023): shop-scoped M:N, full replace.
+			one.GET("/staff/:staffId/service-items", h.ListStaffServiceItems)
+			one.PUT("/staff/:staffId/service-items", h.SetStaffServiceItems)
 
 			// ID cards (ADR-0017 / design/14): shop-scoped resource with a
 			// single active holder, audited and idempotent writes.
@@ -149,6 +152,8 @@ func NewRouter(store *postgres.Store, cfg config.Config) *gin.Engine {
 			one.GET("/orders/:id", h.GetOrder)
 			one.POST("/orders/:id/lines", h.AddOrderLine)
 			one.DELETE("/orders/:id/lines", h.RemoveOrderLine)
+			// Per-line executor reassignment (ADR-0023); service lines only.
+			one.PUT("/orders/:id/lines/:lineNo/staff", h.SetOrderLineStaff)
 			one.POST("/orders/:id/submit", h.SubmitOrder)
 			one.POST("/orders/:id/payments", h.PayOrder)
 			one.POST("/orders/:id/refunds", h.SaleRefund)

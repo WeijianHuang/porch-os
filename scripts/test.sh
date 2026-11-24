@@ -112,7 +112,7 @@ cmd_migrate() {
     --network "$COMPOSE_NETWORK" \
     -e DATABASE_URL="$db_url" \
     -e JWT_SECRET="${JWT_SECRET:-}" \
-    -e EXPECTED_SCHEMA_VERSION="${EXPECTED_SCHEMA_VERSION:-11}"
+    -e EXPECTED_SCHEMA_VERSION="${EXPECTED_SCHEMA_VERSION:-12}"
 }
 
 cmd_integration() {

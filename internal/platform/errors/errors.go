@@ -53,7 +53,8 @@ func mapCode(code string) (int, bool) {
 		return http.StatusNotFound, false
 	case "EXECUTOR_BUSY", "CARD_HELD", "STAFF_ALREADY_HOLDS_CARD", "CARD_IN_USE", "INSUFFICIENT_BALANCE",
 		"CARD_NOT_HELD", "CARD_BOUND_TO_ORDER", "ROOM_INACTIVE", "ROOM_IN_USE",
-		"GROUP_NOT_OPEN", "GROUP_HAS_UNSETTLED_MEMBERS", "GROUP_HAS_PAID_MEMBERS", "ORDER_SETTLED":
+		"GROUP_NOT_OPEN", "GROUP_HAS_UNSETTLED_MEMBERS", "GROUP_HAS_PAID_MEMBERS", "ORDER_SETTLED",
+		"STAFF_INACTIVE":
 		return http.StatusConflict, false
 	case "NO_PRIMARY_QUEUE", "INVALID_STATE", "EXECUTOR_NOT_FOUND", "SITE_NOT_FOUND", "QUEUE_NOT_FOUND", "AUDIT_ACTOR_MISSING":
 		return http.StatusBadRequest, false
@@ -61,7 +62,8 @@ func mapCode(code string) (int, bool) {
 		return http.StatusConflict, code == "IDEMPOTENCY_IN_PROGRESS" || code == "VERSION_CONFLICT"
 	case "PRECONDITION_FAILED":
 		return http.StatusPreconditionFailed, false
-	case "UNPROCESSABLE", "ORDER_CARD_REQUIRED", "ORDER_ROOM_REQUIRED":
+	case "UNPROCESSABLE", "ORDER_CARD_REQUIRED", "ORDER_ROOM_REQUIRED",
+		"ORDER_LINE_STAFF_REQUIRED", "STAFF_NOT_QUALIFIED":
 		return http.StatusUnprocessableEntity, false
 	case "RATE_LIMITED":
 		return http.StatusTooManyRequests, true
@@ -85,6 +87,11 @@ var (
 	IdemInProgress    = New("IDEMPOTENCY_IN_PROGRESS", "首次请求仍在处理，请稍后重试")
 	Internal          = New("INTERNAL", "服务内部错误")
 	DependencyFailure = New("DEPENDENCY_FAILURE", "依赖服务不可用")
+
+	// ADR-0023: service-line executor assignment.
+	StaffNotQualified     = New("STAFF_NOT_QUALIFIED", "该服务员没有这项服务的资质")
+	StaffInactive         = New("STAFF_INACTIVE", "服务员已停用，不能执行服务")
+	OrderLineStaffMissing = New("ORDER_LINE_STAFF_REQUIRED", "服务明细尚未指定服务员")
 )
 
 // FromPG maps PostgreSQL errors to the frozen contract without leaking text.

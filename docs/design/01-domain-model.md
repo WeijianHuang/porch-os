@@ -75,7 +75,9 @@
 
 **充值可退额（不落库，ADR-0016）**：充值退款以 `kind='topup'`、`member_id` 锚定，按原 `payment_id` 计算；可退额 = 原 `payments.amount`（`kind='topup'`、`succeeded`）− `SUM(refunds.amount)`（`payment_id=? AND kind='topup' AND succeeded`）。退款只涉及**实际支付部分**；余额不足（`member_balances.balance < 退款额`）时**整笔拒绝**（`409 INSUFFICIENT_BALANCE`），不做部分退、不写负余额；**禁止跨店退款**（退款单 `shop_id` 强绑原支付与会员本店账）。
 
-**`OrderLine`**：`order_id`、`catalog_item_id`（只持 ID）、`quantity`、`unit_price`、`amount`、`line_no`。明细不随目录价格变动而回溯改写——下单时快照价格。
+**`OrderLine`**：`order_id`、`catalog_item_id`（只持 ID）、`quantity`、`unit_price`、`amount`、`line_no`。明细不随目录价格变动而回溯改写——下单时快照价格。**ADR-0023 增量**：服务明细另带 `staff_id`（店内 FK 到 `staff`，一条服务行一位执行人；商品行必须为空）与 `staff_name_snapshot`（指定时快照姓名，删人后置空 `staff_id` 仍可读历史）。一单可有多位服务员，各自负责不同服务项；提交结账前每条 `type='service'` 明细必须有合格执行人。
+
+**`StaffServiceItem`（资质关系）**：服务员 ↔ 服务目录项的店内多对多（关联表 `staff_service_items`，带 `shop_id`，复合外键锁服务员同店；目录项仍是 A 类全局行）。只授权 `type='service'` 的目录项；资质用于开单时过滤可选服务员与提交时复验，不驱动排班、计时或业绩归属（ADR-0023）。
 
 **`Payment` / `PaymentEntry`**：一次收款可组合多种方式（现金、卡、余额），每个 `PaymentEntry` 记方式与金额，合计等于本次收款额。禁止把「组合支付」压成一个字符串字段。`method` 只记**真实资金渠道**（`cash` / `balance` / `card`）：**券不是支付，它减少应收、不发生资金转移，一律进 `order_price_adjustments`（按明细分摊），不得进 `payment_entries`**（ADR-0016）；本期无卡券实体 / 发放 / 核销规划，`card` 保留枚举位但本期接入以 API 白名单为准。`Payment` 以 `kind` 区分来源：`sale`（销售收款，`order_id` 必填，可多次尝试，失败终态、重试生成新行）、`topup`（会员充值，`order_id` 为空、`member_id` 必填）、`other`（其他收款，本期不开放端点）；三者由数据库 CHECK 约束钉死，不允许「有订单却是充值」的脏数据（ADR-0013）。`payments` 与 `refunds` 均带 `shift_id` / `operator_id`，记录**动作发生时**的班次与操作人（只持 ID、不建外键导航）；退款的归属不继承原订单，因为退款常发生在另一班次、由另一人操作。
 

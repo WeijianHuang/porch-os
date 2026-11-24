@@ -4,8 +4,13 @@
 
 ## [Unreleased]
 
+### 修复
+
+- **同一订单可连续添加多条明细**：`AddOrderLine` 原先用 `CanOrderTransition(draft → open)` 当成员判定，导致第一条明细把单据变成 `open` 后第二条被 `412 PRECONDITION_FAILED` 拒绝。改为显式检查 `draft`/`open` 两种状态并将条件更新放宽到 `status IN ('draft','open')`，不改状态机与金额口径。
+
 ### 新增
 
+- **ADR-0023（第十五次受控扩展，已接受）**：服务员 ↔ 服务项资质与明细执行人。① 新增 `staff_service_items`（带 `shop_id`、复合外键 `(shop_id, staff_id)` 锁同店、`ON DELETE CASCADE`），只授权 `catalog_items.type='service'`；`GET/PUT /staff/{staffId}/service-items` 全量替换资质（版本乐观锁、`queue.read`/`queue.write`），`GET /staff` 与详情增量返回 `service_item_ids[]`。② `order_lines` 增 `staff_id` + `staff_name_snapshot`（成对 CHECK、店内复合外键、无级联；一服务行一人、商品行不绑），`POST /orders/{id}/lines` 接受可选 `staff_public_id`，新增 `PUT /orders/{id}/lines/{lineNo}/staff` 改派 / 清空；订单详情 `lines[]` 增量投影。③ 双校验：加项 / 改派时校验任职状态与资质，提交结账前逐条校验服务明细执行人；缺人 `422 ORDER_LINE_STAFF_REQUIRED`、无资质 `422 STAFF_NOT_QUALIFIED`、停用 `409 STAFF_INACTIVE`（均带 `details.line_no`），商品行不参与；资质撤销不回写历史明细，提交时显式拒绝改派。④ 删除服务员同事务置空明细 `staff_id`、保留快照名，未结单需重新指定。⑤ 明确不做：计时实例、业绩归属、一条明细多人、整单负责人、调度派单联动。新增迁移 `00012_service_item_qualifications_and_line_staff.sql`，`EXPECTED_SCHEMA_VERSION` 由 11 → **12**；同步 `design/01` / `02` / `03` / `06`（F-01 阶段 B / C）/ `16`（P3 已接受）/ `00`、`ARCHITECTURE.md`、README、`.env.example`、`scripts/test.sh`。
 - **ADR-0022（第十四次受控扩展，已接受，尚未落地代码；同日按业务确认修订）**：澄清并固化「同行」语义——初版 `design/16` 误读为「多卡绑一单」，实际是**一单一卡（1:1）+ 一单一房间 + 多单成组共同结算**。
   - ① 卡：`orders.card_id` + `card_released_at` + `card_release_reason`（可空、复合外键锁同店、部分唯一 `uq_orders_active_card` 按 `card_released_at IS NULL` 判定有效占用）；提交结账前必须已绑有效卡，否则 `422 ORDER_CARD_REQUIRED`，**修订 ADR-0017「不校验开单必须持卡」边界**；新增 `POST/DELETE /orders/{id}/card`，`GET /cards` 增 `bound_order` 字段。
   - ② **结算 / 取消自动释放卡（业务确认必须）**：支付使订单结清（派生应付 ≤ 0）或取消未支付单时，与支付写入同事务把订单侧绑定置 `settled` / `cancelled`，并把该卡当前 `card_holdings` 置 `released_at` 且 `release_reason='order_settled'` / `'order_cancelled'`；写 `order.card_released` / `card.hold_released` 事件与审计，幂等重放不重复。卡立即可被他人领取复用；**修订 ADR-0017「释放只能人工调用」边界**，手动解绑 / 换卡仍只结束订单侧绑定。

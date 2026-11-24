@@ -111,6 +111,9 @@
 | `CARD_BOUND_TO_ORDER` | 409 | 否 | 该 ID 卡已被另一张活跃订单占用（ADR-0022） |
 | `ORDER_CARD_REQUIRED` | 422 | 否 | 提交结账的订单尚未绑定有效 ID 卡（ADR-0022） |
 | `ORDER_ROOM_REQUIRED` | 422 | 否 | 提交结账的订单尚未绑定房间（ADR-0022） |
+| `ORDER_LINE_STAFF_REQUIRED` | 422 | 否 | 提交结账时某条服务明细尚未指定执行服务员（ADR-0023，`details.line_no`） |
+| `STAFF_NOT_QUALIFIED` | 422 | 否 | 指定 / 提交的服务员没有该项服务的资质，或资质已被撤销（ADR-0023） |
+| `STAFF_INACTIVE` | 409 | 否 | 指定 / 提交的服务员任职状态为 `inactive`（ADR-0023） |
 | `ROOM_NOT_FOUND` | 404 | 否 | 订单绑定 / 更换的房间不存在（已通过门店校验，ADR-0022） |
 | `ROOM_INACTIVE` | 409 | 否 | 已停用的房间不可被新订单绑定（ADR-0022） |
 | `ROOM_IN_USE` | 409 | 否 | 房间被历史订单引用，不可删除（ADR-0022） |
@@ -224,6 +227,8 @@
 | order | `GET /api/v1/shops/{shopId}/orders` | 单据列表（keyset 分页） |
 | order | `GET /api/v1/shops/{shopId}/orders/{id}` | 单据详情（含明细）；金额响应含不可变 `total_amount` / `discount_amount` 与**派生** `paid_amount` / `refunded_amount` / `refundable_amount`（从 `payments` / `refunds` 的 succeeded 行聚合，不落库；已退显式过滤 `kind='sale'`，不含充值退款，ADR-0014/0016）；上下文含 `card`（当前有效绑定，已释放为 null）/ `card_binding_history`（最近一次卡 + 释放原因）/ `room: {public_id, floor, code, name} | null` / `companion_group: {public_id, status} | null`（当前活跃成员关系所属组，单值——`uq_cgm_active_order` 保证一单至多一个活跃成员关系；组状态含 `open` / `closed` / `cancelled`，由前端判断可操作性；只读派生，不落 `orders` 列，拆出后为 null，ADR-0022 §5） |
 | order | `POST / DELETE /api/v1/shops/{shopId}/orders/{id}/lines` | 加项 / 删项 |
+| staff（[ADR-0023](../decisions/0023-service-item-qualifications-and-line-staff.md)） | `GET / PUT /api/v1/shops/{shopId}/staff/{staffId}/service-items` | 查询 / 全量替换服务项资质：`{catalog_item_ids[], version}`；仅 `type='service'` 目录项，读 `queue.read`、写 `queue.write`；`GET /staff` 与 `/staff/{id}` 增量返回 `service_item_ids[]` |
+| order（[ADR-0023](../decisions/0023-service-item-qualifications-and-line-staff.md)） | `PUT /api/v1/shops/{shopId}/orders/{id}/lines/{lineNo}/staff` | 改派 / 清空明细执行服务员：`{staff_public_id: string \| null}`；仅 `draft` / `open`，服务行改派校验资质与任职状态，商品行拒绝；`POST /orders/{id}/lines` 请求体同步支持可选 `staff_public_id`；订单详情 `lines[]` 增量返回 `staff_public_id` / `staff_name_snapshot` |
 | order | `POST /api/v1/shops/{shopId}/orders/{id}/submit` | 提交结账 → `pending_payment`；**前置校验：必须已绑定一张有效 ID 卡**（本店 / `active` / 未释放）与一个本店有效房间，否则 `422 ORDER_CARD_REQUIRED` / `ORDER_ROOM_REQUIRED`（ADR-0022，修订 ADR-0017「不校验开单必须持卡」与 ADR-0011「房间不与单据绑定」边界） |
 | order | `POST /api/v1/shops/{shopId}/orders/{id}/payments` | 组合支付 → `paid`；**结清时同事务自动释放卡**：订单卡绑定置 `card_released_at/reason=settled`，该卡当前持有流水置 `released_at/release_reason='order_settled'`，并写审计 / outbox；部分支付未结清不释放（ADR-0022） |
 | order | `POST /api/v1/shops/{shopId}/orders/{id}/refunds` | 销售退款（生成 `kind='sale'` 退款单）；请求体 `{amount, reason, refund_entries:[{method, amount}]}` 必须显式携带渠道明细（ADR-0014），`Σ refund_entries = amount`、单渠道累计退款 ≤ 该渠道原支付额，超限返回 `409`（由前端 / 客户协商，系统不自动分摊）；只退实际支付部分、不含券优惠；**禁止跨店退款**；退款单记**退款动作发生时**的 `shift_id` / `operator_id`，不继承原单（ADR-0013/0016） |

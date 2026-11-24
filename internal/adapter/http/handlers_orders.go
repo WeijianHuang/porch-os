@@ -182,6 +182,7 @@ func (h *Handler) AddOrderLine(c *gin.Context) {
 	var req struct {
 		CatalogItemID string `json:"catalog_item_id"`
 		Quantity      string `json:"quantity"`
+		StaffPublicID string `json:"staff_public_id"` // ADR-0023: service lines only
 	}
 	if err := decode(c, &req); err != nil || req.CatalogItemID == "" || req.Quantity == "" {
 		badRequest(c, errors.New("catalog_item_id and quantity are required"))
@@ -189,7 +190,8 @@ func (h *Handler) AddOrderLine(c *gin.Context) {
 	}
 	p := Current(c)
 	h.runWrite(c, func(tx pgx.Tx) (int, any, error) {
-		v, err := h.Store.AddOrderLine(c.Request.Context(), tx, p.ShopID, p.UserID, c.Param("id"), req.CatalogItemID, req.Quantity)
+		v, err := h.Store.AddOrderLine(c.Request.Context(), tx, p.ShopID, p.UserID,
+			c.Param("id"), req.CatalogItemID, req.Quantity, req.StaffPublicID)
 		if err != nil {
 			return 0, nil, pgErr(err)
 		}

@@ -11,6 +11,7 @@ import (
 	"github.com/Masterminds/squirrel"
 	"github.com/WeijianHuang/porch-os/internal/domain/money"
 	domorder "github.com/WeijianHuang/porch-os/internal/domain/order"
+	"github.com/WeijianHuang/porch-os/internal/domain/servicestaff"
 	apierrors "github.com/WeijianHuang/porch-os/internal/platform/errors"
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
@@ -76,12 +77,14 @@ type OrderCompanionGroupRef struct {
 }
 
 type OrderLine struct {
-	LineNo           int    `json:"line_no"`
-	CatalogItemID    string `json:"catalog_item_id"`
-	ItemNameSnapshot string `json:"item_name_snapshot"`
-	Quantity         string `json:"quantity"`
-	UnitPrice        string `json:"unit_price"`
-	Amount           string `json:"amount"`
+	LineNo            int     `json:"line_no"`
+	CatalogItemID     string  `json:"catalog_item_id"`
+	ItemNameSnapshot  string  `json:"item_name_snapshot"`
+	Quantity          string  `json:"quantity"`
+	UnitPrice         string  `json:"unit_price"`
+	Amount            string  `json:"amount"`
+	StaffPublicID     *string `json:"staff_public_id"`
+	StaffNameSnapshot *string `json:"staff_name_snapshot"`
 }
 
 // GetCursor enables keyset pagination for ListOrders. It is exported so the
@@ -262,9 +265,11 @@ func (s *Store) OrderDetail(ctx context.Context, q DBTX, shopID int64, publicID 
 		return v, err
 	}
 	rows, err := q.Query(ctx, `
-		SELECT line_no, catalog_item_public::text, item_name_snapshot, quantity::text, unit_price::text, amount::text
+		SELECT line_no, catalog_item_public::text, item_name_snapshot, quantity::text,
+		       unit_price::text, amount::text, staff_public::text, staff_name_snapshot
 		FROM (SELECT l.line_no, c.public_id AS catalog_item_public, l.item_name_snapshot,
-		             l.quantity, l.unit_price, l.amount
+		             l.quantity, l.unit_price, l.amount, l.staff_name_snapshot,
+		             (SELECT public_id::text FROM staff WHERE id=l.staff_id) AS staff_public
 		      FROM order_lines l JOIN catalog_items c ON c.id=l.catalog_item_id
 		      WHERE l.shop_id=$1 AND l.order_id=$2) x
 		ORDER BY line_no`, shopID, v.ID)
@@ -274,9 +279,17 @@ func (s *Store) OrderDetail(ctx context.Context, q DBTX, shopID int64, publicID 
 	v.Lines = make([]OrderLine, 0)
 	for rows.Next() {
 		var l OrderLine
-		if err := rows.Scan(&l.LineNo, &l.CatalogItemID, &l.ItemNameSnapshot, &l.Quantity, &l.UnitPrice, &l.Amount); err != nil {
+		var staffPub, staffName sql.NullString
+		if err := rows.Scan(&l.LineNo, &l.CatalogItemID, &l.ItemNameSnapshot, &l.Quantity,
+			&l.UnitPrice, &l.Amount, &staffPub, &staffName); err != nil {
 			rows.Close()
 			return v, err
+		}
+		if staffPub.Valid {
+			l.StaffPublicID = &staffPub.String
+		}
+		if staffName.Valid {
+			l.StaffNameSnapshot = &staffName.String
 		}
 		v.Lines = append(v.Lines, l)
 	}
@@ -386,12 +399,15 @@ func (s *Store) CreateOrder(ctx context.Context, tx pgx.Tx, shopID, operatorID i
 
 // AddOrderLine snapshots the catalog item name and effective (overridden)
 // price at order time. draft → open is the only allowed state move here.
-func (s *Store) AddOrderLine(ctx context.Context, tx pgx.Tx, shopID, operatorID int64, orderPub, itemPub, quantity string) (Order, error) {
+func (s *Store) AddOrderLine(ctx context.Context, tx pgx.Tx, shopID, operatorID int64, orderPub, itemPub, quantity, staffPub string) (Order, error) {
 	v, err := s.OrderByPublic(ctx, tx, shopID, orderPub)
 	if err != nil {
 		return v, err
 	}
-	if err := domorder.CanOrderTransition(v.Status, domorder.StatusOpen); err != nil {
+	// A second line keeps the order in `open`: draft → open is a transition,
+	// open → open is not. The state machine must not be used as a membership
+	// check here, otherwise only the first line of an order could be added.
+	if v.Status != domorder.StatusDraft && v.Status != domorder.StatusOpen {
 		return v, errInvalidState
 	}
 	qty, err := decimal.NewFromString(quantity)
@@ -399,15 +415,30 @@ func (s *Store) AddOrderLine(ctx context.Context, tx pgx.Tx, shopID, operatorID 
 		return v, apierrors.InvalidArgument
 	}
 	var itemID int64
-	var name, price string
+	var name, price, itemType string
 	err = tx.QueryRow(ctx, `
-		SELECT c.id, c.name, COALESCE(o.price, c.base_price)::text
+		SELECT c.id, c.name, c.type, COALESCE(o.price, c.base_price)::text
 		FROM catalog_items c
 		LEFT JOIN shop_catalog_overrides o
 		  ON o.catalog_item_id=c.id AND o.shop_id=$1 AND o.available
-		WHERE c.public_id=$2::uuid`, shopID, itemPub).Scan(&itemID, &name, &price)
+		WHERE c.public_id=$2::uuid`, shopID, itemPub).Scan(&itemID, &name, &itemType, &price)
 	if err != nil {
 		return v, err
+	}
+	// ADR-0023: product lines never carry an executor. A service line may be
+	// added without one (draft) but a supplied staff member must be qualified.
+	if !servicestaff.CanAssign(itemType, staffPub) {
+		return v, apierrors.WithDetails(apierrors.InvalidArgument,
+			apierrors.Detail{Field: "staff_public_id", Reason: "product_line_cannot_have_staff"})
+	}
+	var staffID *int64
+	var staffName *string
+	if staffPub != "" {
+		id, name, err := s.ResolveQualifiedStaff(ctx, tx, shopID, staffPub, itemID)
+		if err != nil {
+			return v, err
+		}
+		staffID, staffName = &id, &name
 	}
 	unitPrice, err := money.FromString(price)
 	if err != nil {
@@ -423,7 +454,7 @@ func (s *Store) AddOrderLine(ctx context.Context, tx pgx.Tx, shopID, operatorID 
 	}
 	tag, err := tx.Exec(ctx, `
 		UPDATE orders SET status='open', version=version+1, updated_at=now()
-		WHERE shop_id=$1 AND id=$2 AND version=$3 AND status='draft'`, shopID, v.ID, v.Version)
+		WHERE shop_id=$1 AND id=$2 AND version=$3 AND status IN ('draft','open')`, shopID, v.ID, v.Version)
 	if err != nil {
 		return v, err
 	}
@@ -431,8 +462,10 @@ func (s *Store) AddOrderLine(ctx context.Context, tx pgx.Tx, shopID, operatorID 
 		return v, errVersion
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO order_lines (shop_id,order_id,line_no,catalog_item_id,item_name_snapshot,quantity,unit_price,amount)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, shopID, v.ID, next, itemID, name, qty.String(), unitPrice.String(), amount.String()); err != nil {
+		INSERT INTO order_lines (shop_id,order_id,line_no,catalog_item_id,item_name_snapshot,
+		                         quantity,unit_price,amount,staff_id,staff_name_snapshot)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		shopID, v.ID, next, itemID, name, qty.String(), unitPrice.String(), amount.String(), staffID, staffName); err != nil {
 		return v, err
 	}
 	return s.OrderByPublic(ctx, tx, shopID, orderPub)
@@ -520,6 +553,10 @@ func (s *Store) SubmitOrder(ctx context.Context, tx pgx.Tx, shopID, operatorID i
 	}
 	// ADR-0022: submit requires an active card binding and a bound room.
 	if err := submitContextCheck(ctx, tx, shopID, v.ID); err != nil {
+		return v, err
+	}
+	// ADR-0023: every service line still needs an active, qualified executor.
+	if err := s.ValidateOrderLineStaff(ctx, tx, shopID, v.ID); err != nil {
 		return v, err
 	}
 	// Read line snapshots for pricing (source of truth, never client totals).
