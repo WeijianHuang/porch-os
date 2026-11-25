@@ -363,7 +363,7 @@
 | PATCH | `/staff-categories/{categoryId}` | `queue.write` | `{name?,sort_order?,status?,version}`；停用只阻止新绑定 |
 | PATCH | `/staff/{staffId}` | `queue.write` | 增量 `category_public_id?: string \| null`，沿用 `version` 乐观锁 |
 | GET | `/staff` / `/staff/{staffId}` | `queue.read` | 增量 `category: {public_id,code,name} \| null` |
-| GET | `/catalog-items` | `catalog.read` | 增量 `category_public_id` / `category_name`（可空） |
+| GET | `/catalog-items` | `catalog.read` | 增量 `category_public_id` / `category_name`（可空）与只读 `attributes`；属性只供商品弹窗展示，不写回订单行 |
 
 新增错误码：`STAFF_CATEGORY_NOT_FOUND`（404，分类不存在或跨店）、`STAFF_CATEGORY_INACTIVE`（409，分类停用不能新绑定）；重复 `code` / `name` 与并发修改沿用既有 409。开单辅助选人不新增端点，复用 `GET /staff`、`GET /catalog-items`、`GET /catalog-categories` 一次取回后前端筛选；服务端资质校验仍按 ADR-0023 返回 `STAFF_NOT_QUALIFIED`。
 

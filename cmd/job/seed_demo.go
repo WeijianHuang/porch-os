@@ -56,6 +56,33 @@ var demoCatalogCategories = []struct {
 	{"CAT-D", "快捷服务", 4},
 }
 
+// The add-product picker groups products under a root category. Its two
+// performance columns are read-only catalog metadata, never written to an
+// order line (ADR-0023).
+var demoProductCategories = []struct {
+	code, name string
+	order      int
+}{
+	{"CAT-PRODUCT-ROOT", "商品", 90},
+	{"PROD-CONV", "便利商品", 91},
+	{"PROD-DRINK", "饮品", 92},
+	{"PROD-RETAIL", "零售商品", 93},
+	{"PROD-OTHER", "其他商品", 94},
+}
+
+var demoProductItems = []struct {
+	sku, name, price, category, attributes string
+}{
+	{"PROD-001", "瓶装饮品 A", "15.00", "PROD-DRINK", `{"performance_primary":"5.00","performance_secondary":"0.00"}`},
+	{"PROD-002", "即食食品 A", "10.00", "PROD-CONV", `{"performance_primary":"3.00","performance_secondary":"0.00"}`},
+	{"PROD-003", "清洁用品 A", "10.00", "PROD-RETAIL", `{"performance_primary":"3.00","performance_secondary":"0.00"}`},
+	{"PROD-004", "日用小件 A", "30.00", "PROD-RETAIL", `{"performance_primary":"8.00","performance_secondary":"0.00"}`},
+	{"PROD-005", "卫生用品 A", "78.00", "PROD-RETAIL", `{"performance_primary":"20.00","performance_secondary":"0.00"}`},
+	{"PROD-006", "休闲食品 A", "10.00", "PROD-CONV", `{"performance_primary":"3.00","performance_secondary":"0.00"}`},
+	{"PROD-007", "一次性用品 A", "38.00", "PROD-OTHER", `{"performance_primary":"10.00","performance_secondary":"0.00"}`},
+	{"PROD-008", "罐装饮品 A", "29.00", "PROD-DRINK", `{"performance_primary":"5.00","performance_secondary":"0.00"}`},
+}
+
 // seedDemo is a repeatable development helper: it writes 10 shop-scoped ID
 // cards and 10 service catalog items. Card codes are unique per shop and
 // catalog SKUs are unique globally; re-running inserts nothing new. This is
@@ -142,6 +169,30 @@ func seedDemo(ctx context.Context, cfg config.Config) error {
 		}
 		cc += int(tag.RowsAffected())
 	}
+	for _, c := range demoProductCategories {
+		if c.code == "CAT-PRODUCT-ROOT" {
+			tag, err := tx.Exec(ctx, `
+				INSERT INTO catalog_categories (code, name, sort_order)
+				SELECT $1,$2,$3
+				WHERE NOT EXISTS (SELECT 1 FROM catalog_categories WHERE parent_id IS NULL AND code=$1)`,
+				c.code, c.name, c.order)
+			if err != nil {
+				return err
+			}
+			cc += int(tag.RowsAffected())
+			continue
+		}
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO catalog_categories (code, name, sort_order, parent_id)
+			SELECT $1,$2,$3, r.id FROM catalog_categories r
+			WHERE r.code='CAT-PRODUCT-ROOT'
+			  AND NOT EXISTS (SELECT 1 FROM catalog_categories c WHERE c.code=$1)`,
+			c.code, c.name, c.order)
+		if err != nil {
+			return err
+		}
+		cc += int(tag.RowsAffected())
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE staff st SET category_id = c.id
 		FROM staff_categories c
@@ -157,12 +208,33 @@ func seedDemo(ctx context.Context, cfg config.Config) error {
 			return err
 		}
 	}
+	products := 0
+	for _, it := range demoProductItems {
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO catalog_items (sku, name, type, base_price, category_id, attributes)
+			SELECT $1,$2,'product',$3::numeric,c.id,$4::jsonb
+			FROM catalog_categories c WHERE c.code=$5
+			ON CONFLICT (sku) DO NOTHING`, it.sku, it.name, it.price, it.attributes, it.category)
+		if err != nil {
+			return err
+		}
+		products += int(tag.RowsAffected())
+	}
+	// The pre-existing generic product predates category grouping; assign it
+	// once so the add-product tab bar never shows an uncategorized row.
+	if _, err := tx.Exec(ctx, `
+		UPDATE catalog_items i SET category_id = c.id
+		FROM catalog_categories c
+		WHERE i.sku='SMOKE-002' AND c.code='PROD-OTHER' AND i.category_id IS NULL`); err != nil {
+		return err
+	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
 	slog.Info("seed demo complete", "shop_id", shopID,
 		"cards_inserted", cards, "service_items_inserted", items,
+		"product_items_inserted", products,
 		"staff_categories_inserted", sc, "catalog_categories_inserted", cc)
 	return nil
 }

@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 
 	"github.com/Masterminds/squirrel"
@@ -11,19 +12,20 @@ import (
 )
 
 type CatalogItem struct {
-	PublicID         string    `json:"public_id"`
-	SKU              string    `json:"sku"`
-	Name             string    `json:"name"`
-	Type             string    `json:"type"`
-	BasePrice        string    `json:"base_price"`
-	DurationMinutes  *int      `json:"duration_minutes"` // ADR-0018: service nominal minutes; product -> null
-	Active           bool      `json:"active"`
-	Version          int       `json:"version"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
-	CategoryPublicID *string   `json:"category_public_id"`
-	CategoryName     *string   `json:"category_name"`
-	ID               int64     `json:"-"`
+	PublicID         string         `json:"public_id"`
+	SKU              string         `json:"sku"`
+	Name             string         `json:"name"`
+	Type             string         `json:"type"`
+	BasePrice        string         `json:"base_price"`
+	DurationMinutes  *int           `json:"duration_minutes"` // ADR-0018: service nominal minutes; product -> null
+	Active           bool           `json:"active"`
+	Version          int            `json:"version"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
+	CategoryPublicID *string        `json:"category_public_id"`
+	CategoryName     *string        `json:"category_name"`
+	Attributes       map[string]any `json:"attributes"`
+	ID               int64          `json:"-"`
 }
 
 type Category struct {
@@ -34,17 +36,22 @@ type Category struct {
 	SortOrder int     `json:"sort_order"`
 }
 
-const itemCols = "ci.public_id::text, ci.sku, ci.name, ci.type, ci.base_price::text, ci.duration_minutes, ci.active, ci.version, ci.created_at, ci.updated_at, ci.id, cc.public_id::text, cc.name"
+const itemCols = "ci.public_id::text, ci.sku, ci.name, ci.type, ci.base_price::text, ci.duration_minutes, ci.active, ci.version, ci.created_at, ci.updated_at, ci.id, cc.public_id::text, cc.name, ci.attributes::jsonb"
 const itemFrom = " FROM catalog_items ci LEFT JOIN catalog_categories cc ON cc.id = ci.category_id"
 
 func scanItem(row pgx.Row) (CatalogItem, error) {
 	var v CatalogItem
 	var duration sql.NullInt32
+	var attributes []byte
 	err := row.Scan(&v.PublicID, &v.SKU, &v.Name, &v.Type, &v.BasePrice, &duration, &v.Active, &v.Version, &v.CreatedAt, &v.UpdatedAt, &v.ID,
-		&v.CategoryPublicID, &v.CategoryName)
+		&v.CategoryPublicID, &v.CategoryName, &attributes)
 	if duration.Valid {
 		d := int(duration.Int32)
 		v.DurationMinutes = &d
+	}
+	v.Attributes = map[string]any{}
+	if len(attributes) > 0 {
+		_ = json.Unmarshal(attributes, &v.Attributes)
 	}
 	v.CreatedAt, v.UpdatedAt = utc(v.CreatedAt), utc(v.UpdatedAt)
 	return v, err
