@@ -2,6 +2,7 @@ package http
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/WeijianHuang/porch-os/internal/adapter/postgres"
 	qdomain "github.com/WeijianHuang/porch-os/internal/domain/queue"
@@ -187,6 +188,7 @@ func (h *Handler) CreateStaff(c *gin.Context) {
 	var req struct {
 		Code        string `json:"code"`
 		DisplayName string `json:"display_name"`
+		Alias       string `json:"alias"`
 	}
 	if err := decode(c, &req); err != nil {
 		badRequest(c, err)
@@ -196,9 +198,14 @@ func (h *Handler) CreateStaff(c *gin.Context) {
 		badRequest(c, err)
 		return
 	}
+	if err := qdomain.ValidateAlias(req.Alias); err != nil {
+		badRequest(c, err)
+		return
+	}
 	shopID := Current(c).ShopID
+	alias := strings.TrimSpace(req.Alias)
 	h.runWrite(c, func(tx pgx.Tx) (int, any, error) {
-		v, err := h.Store.CreateStaff(c.Request.Context(), tx, shopID, req.Code, req.DisplayName)
+		v, err := h.Store.CreateStaff(c.Request.Context(), tx, shopID, req.Code, req.DisplayName, alias)
 		if err != nil {
 			return 0, nil, pgErr(err)
 		}
@@ -261,6 +268,8 @@ func (h *Handler) UpdateStaff(c *gin.Context) {
 		return
 	}
 	var req struct {
+		Code             *string `json:"code"`
+		Alias            *string `json:"alias"`
 		DisplayName      *string `json:"display_name"`
 		Status           *string `json:"status"`
 		DutyStatus       *string `json:"duty_status"`
@@ -271,14 +280,27 @@ func (h *Handler) UpdateStaff(c *gin.Context) {
 		badRequest(c, errors.New("version is required"))
 		return
 	}
-	if req.DisplayName == nil && req.Status == nil && req.DutyStatus == nil && req.CategoryPublicID == nil {
+	if req.Code == nil && req.Alias == nil && req.DisplayName == nil && req.Status == nil &&
+		req.DutyStatus == nil && req.CategoryPublicID == nil {
 		badRequest(c, errors.New("at least one field is required"))
 		return
 	}
-	name, status, duty := existing.DisplayName, existing.Status, existing.DutyStatus
+	// ADR-0026: code stays shop-unique via the DB constraint; alias is a
+	// display-only label and normalises whitespace to an empty string.
+	code, alias, name, status, duty := existing.Code, existing.Alias, existing.DisplayName, existing.Status, existing.DutyStatus
+	if req.Code != nil {
+		code = strings.TrimSpace(*req.Code)
+	}
 	if req.DisplayName != nil {
 		name = *req.DisplayName
-		if err := qdomain.ValidateStaff(existing.Code, name); err != nil {
+	}
+	if err := qdomain.ValidateStaff(code, name); err != nil {
+		badRequest(c, err)
+		return
+	}
+	if req.Alias != nil {
+		alias = strings.TrimSpace(*req.Alias)
+		if err := qdomain.ValidateAlias(alias); err != nil {
 			badRequest(c, err)
 			return
 		}
@@ -327,7 +349,7 @@ func (h *Handler) UpdateStaff(c *gin.Context) {
 		}
 	}
 	h.runWrite(c, func(tx pgx.Tx) (int, any, error) {
-		v, err := h.Store.UpdateStaff(c.Request.Context(), tx, shopID, id, name, status, duty, categoryID, req.Version)
+		v, err := h.Store.UpdateStaff(c.Request.Context(), tx, shopID, id, code, alias, name, status, duty, categoryID, req.Version)
 		if postgres.IsNoRows(err) {
 			return 0, nil, apierrors.New("VERSION_CONFLICT", "并发冲突，请重读后重试")
 		}

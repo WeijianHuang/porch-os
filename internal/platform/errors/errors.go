@@ -55,7 +55,7 @@ func mapCode(code string) (int, bool) {
 	case "EXECUTOR_BUSY", "CARD_HELD", "STAFF_ALREADY_HOLDS_CARD", "CARD_IN_USE", "INSUFFICIENT_BALANCE",
 		"CARD_NOT_HELD", "CARD_BOUND_TO_ORDER", "ROOM_INACTIVE", "ROOM_IN_USE",
 		"GROUP_NOT_OPEN", "GROUP_HAS_UNSETTLED_MEMBERS", "GROUP_HAS_PAID_MEMBERS", "ORDER_SETTLED",
-		"STAFF_INACTIVE", "STAFF_CATEGORY_INACTIVE":
+		"STAFF_INACTIVE", "STAFF_CATEGORY_INACTIVE", "STAFF_CODE_CONFLICT":
 		return http.StatusConflict, false
 	case "NO_PRIMARY_QUEUE", "INVALID_STATE", "EXECUTOR_NOT_FOUND", "SITE_NOT_FOUND", "QUEUE_NOT_FOUND", "AUDIT_ACTOR_MISSING":
 		return http.StatusBadRequest, false
@@ -100,6 +100,9 @@ var (
 
 	// ADR-0025: reusable shift templates, one template per staff member.
 	ShiftTemplateNotFound = New("SHIFT_TEMPLATE_NOT_FOUND", "班次模板不存在或不属于本店")
+
+	// ADR-0026: shop-scoped staff code stays unique when edited.
+	StaffCodeConflict = New("STAFF_CODE_CONFLICT", "工号在本店已存在")
 )
 
 // FromPG maps PostgreSQL errors to the frozen contract without leaking text.
@@ -111,6 +114,9 @@ func FromPG(err error) *APIError {
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
 		case "23505": // unique_violation
+			if pgErr.ConstraintName == "uq_staff_shop_code" {
+				return StaffCodeConflict
+			}
 			return Conflict
 		case "23503": // foreign_key_violation
 			return InvalidArgument

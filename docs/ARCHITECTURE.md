@@ -195,9 +195,12 @@ R0 引导骨架仅用标准库提供 `/health`，零外部依赖，作为 CI 基
 | [15 服务类目录项时长](design/15-service-duration.md) | `catalog_items.duration_minutes`（服务 1..1440 分钟、商品 `null`）、目录端点增量、`cmd/job seed-demo` 幂等种子（ADR-0018 扩展，迁移 `00009`） |
 | [16 开单收银工作台功能分析](design/16-order-entry-and-checkout.md) | 收银界面 8 区域分解、术语通用化、与冻结契约的映射、收款渠道 8→3 收敛、提案台账；含语义澄清（一单一卡 + 一单一房间 + 多单成组、结清自动释放卡；P1 / P2 / P8 已由 ADR-0022 接受、P3 由 ADR-0023 接受，schema 12，分析 + 设计册） |
 | [17 班次模板与一人一班](design/17-staff-shift-templates.md) | 店内 `shift_templates`（HH:MM 时间窗 / 前置打卡分钟 / 次日标记）、`staff.shift_template_id` 一人一班、全量分配与删除解绑；与订单域营业班次实例 `shifts` 分离（ADR-0025，迁移 `00014`，schema 14） |
+| [00 总览](design/00-overview.md) §ADR-0026 | 服务人员工号可编辑（`uq_staff_shop_code` 不变，新增 `409 STAFF_CODE_CONFLICT`）与可选别名 `staff.alias`（展示/检索标签，非唯一、不授权）；修订 `01` / `02` / `03` / `10`（迁移 `00015`，schema 15） |
 
 **落地状态**：R3 订单域后端已按 ADR-0013 / 0014 / 0016 与 `01` / `02` / `03` / `06` 落地（迁移 `00010`，schema 版本 10）——班次 / 订单 / 明细 / 价格调整 / 支付 / 支付渠道明细 / 退款 / 退款渠道明细 8 张表，13 个单店端点，权限 `order.read` / `order.write` / `member.topup.write`；报表流式导出与前端订单页面待续。ADR-0019 / 0020 / 0021 已并入订单域（试价 / 让利结构化 / 表名更名，均未升版本）。**ADR-0022 已接受但尚未落地代码**：新增迁移 `00011`（`orders.card_id` + `card_released_at/reason`、`orders.room_id`、`rooms` 补 `(shop_id, id)`、`companion_groups` / `companion_group_members`），落地后 `EXPECTED_SCHEMA_VERSION` 须升为 **11**；支付结清 / 取消时须同事务自动释放订单卡绑定与 `card_holdings`，否则会破坏卡片复用不变量。实现前按冻结协议先有本 ADR 与分册（本次已同步），再写 Go 代码。**ADR-0023 已接受**：新增迁移 `00012`（`staff_service_items` 资质表、`order_lines.staff_id` / `staff_name_snapshot`），服务明细提交前必须有合格执行人，商品明细不绑定；迁移后 `EXPECTED_SCHEMA_VERSION` 为 **12**。
 
 **ADR-0025 已落地**：新增 `shift_templates` 与 `staff.shift_template_id`（复合外键锁同店、一人一班），`GET/POST/PATCH/DELETE /shift-templates` 与 `PUT /shift-templates/{id}/staff` 五个端点，`GET /staff` 与详情增量返回 `shift_template`；迁移 `00014` 后 `EXPECTED_SCHEMA_VERSION` 为 **14**。班次模板与订单域营业班次实例 `shifts` 互不读写；不做打卡、派单与绩效。
+
+**ADR-0026 已落地**：`POST /staff` 与 `PATCH /staff/{staffId}` 支持可选 `alias`，PATCH 支持编辑 `code`；`staff.code` 店内唯一约束不变，重复返回 `409 STAFF_CODE_CONFLICT`，`public_id` 与订单快照不回写；迁移 `00015` 后 `EXPECTED_SCHEMA_VERSION` 为 **15**。别名只作展示与检索，不参与身份、授权与计价。
 
 该套文档**已由 [ADR-0008](decisions/0008-design-freeze-and-nq-resolutions.md) 冻结**，以本文与 `docs/decisions/` 下已接受的 ADR 为上游约束。**OQ-01–08、NQ-01–16 与 DP-01–07 全部关闭**（`00` 第 8 节）。冻结后，任何改动 schema、唯一性范围、隔离条件、状态机、错误语义、端点清单，或 `07`–`09` 中固定的副本数 / 连接池 / 保留天数 / 清理窗口基线的 PR，必须**先改设计或 ADR 再改代码**并同步对应分册；只改实现、不改契约的 PR 不需要改设计文档。

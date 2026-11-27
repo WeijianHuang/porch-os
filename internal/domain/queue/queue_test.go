@@ -2,6 +2,7 @@ package queue
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -29,6 +30,21 @@ func TestValidateStaff(t *testing.T) {
 	}
 	if err := ValidateStaff("S1", " "); err != ErrBadName {
 		t.Fatalf("blank name: got %v want ErrBadName", err)
+	}
+}
+
+func TestValidateAlias(t *testing.T) {
+	if err := ValidateAlias(""); err != nil {
+		t.Fatalf("empty alias rejected: %v", err)
+	}
+	if err := ValidateAlias(strings.Repeat("员", 60)); err != nil {
+		t.Fatalf("60-char alias rejected: %v", err)
+	}
+	if err := ValidateAlias(strings.Repeat("a", 61)); err != ErrBadAlias {
+		t.Fatalf("61-char alias: got %v want ErrBadAlias", err)
+	}
+	if err := ValidateAlias(strings.Repeat(" ", 61)); err != nil {
+		t.Fatalf("whitespace-only alias should normalise to empty: %v", err)
 	}
 }
 

@@ -163,4 +163,8 @@ CREATE INDEX idx_queue_staff_shop_staff ON queue_staff (shop_id, staff_id, queue
 
 `shift_templates` 是店内可复用时间模板（`shop_id` + `name` 店内唯一）。`staff.shift_template_id` 为可空标量外键，一人最多一班，复合外键 `(shop_id, shift_template_id)` 禁止跨店；一个班次可有多名成员。分配端点 `PUT /shift-templates/{id}/staff` 全量替换，`GET /staff` 与详情增量返回 `shift_template`。班次不是调度状态 / 分类 / 资质 / 权限，不驱动派单、不改金额、不产生打卡记录；与订单域营业班次实例 `shifts` 分离。完整模型与流程见 [17 分册](17-staff-shift-templates.md)。
 
+## 11. ADR-0026 增补：工号与别名
+
+`staff.code` 仍是店内唯一业务键，但可在 `PATCH /staff/{staffId}` 中编辑；`public_id` 不可变，历史引用与订单快照不回写。新增 `staff.alias` 是可选、非唯一的展示标签（0–60 字符），只用于卡片/详情展示与列表搜索，不参与授权、资质、分类、班次、计价或报表分组；主名称与快照仍取 `display_name`。重复工号由 `(shop_id, code)` 唯一约束拒绝并映射 `409 STAFF_CODE_CONFLICT`。
+
 返回 [00 总览](00-overview.md) 查看完整分册地图与已关闭的 OQ / NQ 清单。

@@ -6,6 +6,7 @@ package queue
 import (
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // Ref is the minimal projection embedded in a detail response.
@@ -74,6 +75,15 @@ func ValidateStaff(code, displayName string) error {
 	}
 	if strings.TrimSpace(displayName) == "" {
 		return ErrBadName
+	}
+	return nil
+}
+
+// ValidateAlias checks the optional display alias (ADR-0026). Aliases are
+// display labels only: never an identity, authorization key or snapshot name.
+func ValidateAlias(alias string) error {
+	if utf8.RuneCountInString(strings.TrimSpace(alias)) > 60 {
+		return ErrBadAlias
 	}
 	return nil
 }
@@ -200,6 +210,7 @@ const (
 	ErrBadSeq       validationError = "seq must be a positive integer"
 	ErrBadName      validationError = "name must not be blank"
 	ErrBadCode      validationError = "code must not be blank"
+	ErrBadAlias     validationError = "alias must be at most 60 characters"
 	ErrBadStatus    validationError = "status must be active or inactive"
 	ErrBadDuty      validationError = "duty_status must be on or off"
 	ErrDutyConflict validationError = "inactive staff cannot be on duty"

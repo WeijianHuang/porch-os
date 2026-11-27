@@ -380,6 +380,17 @@
 
 新增错误码 `SHIFT_TEMPLATE_NOT_FOUND`（404，模板不存在或跨店）；时间 / 分钟数非法沿用 `INVALID_ARGUMENT`（400），重名与版本冲突沿用 409。所有写端点带 `Idempotency-Key`，与营业班次实例端点 `/shifts/current`、`/shifts/open`、`/shifts/:id/close` 完全分开。详见 [17 分册](17-staff-shift-templates.md) §3。
 
+## 9. ADR-0026 增补：工号与别名
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| POST | `/shops/{shopId}/staff` | `queue.write` | 请求体增可选 `alias`；省略等同空串 |
+| PATCH | `/staff/{staffId}` | `queue.write` | 增量接受 `code` / `alias`（均可空字符串语义：`code` 不可为空，`alias` 可清空）+ `version` |
+| GET | `/staff` / `/staff/{staffId}` | `queue.read` | `Staff` 投影增量返回 `alias: string` |
+
+- `code` 在本店重复时返回 `409 STAFF_CODE_CONFLICT`（`uq_staff_shop_code` 唯一冲突精确映射）；别名超长 / 工号空白返回 `400 INVALID_ARGUMENT`；版本过期仍是 `409 VERSION_CONFLICT`。
+- 工号编辑不改 `public_id`、不回写订单明细快照；列表排序仍是 `display_name, code`。权限与幂等键沿用既有写端点契约。
+
 ---
 
 下一册：[04 应用架构](04-application-architecture.md)。

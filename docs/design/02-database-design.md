@@ -586,6 +586,12 @@ $$;
 - `staff` 增可空 `shift_template_id`，`FOREIGN KEY (shop_id, shift_template_id) REFERENCES shift_templates (shop_id, id)`，部分索引 `(shop_id, shift_template_id) WHERE shift_template_id IS NOT NULL`；标量列天然保证一人一班。
 - `Down`：先 drop staff 侧索引、约束与列，再 drop 模板表；存量列为 NULL，无需回填。完整 DDL 见 [17 分册](17-staff-shift-templates.md) §2。
 
+## 11. ADR-0026 增补：迁移 `00015`（schema 14 → 15）
+
+- `staff` 增 `alias text NOT NULL DEFAULT ''` 与 `ck_staff_alias CHECK (character_length(btrim(alias)) <= 60)`；空串表示未填，应用层写入前 `TrimSpace`。不用nullable列、不加唯一约束、不加索引。
+- `code` 列与 `uq_staff_shop_code (shop_id, code)` 约束不变；编辑工号只改文本，`public_id` 稳定。
+- `Down`：先 drop `ck_staff_alias`，再 drop `alias` 列，无需数据回填。
+
 ---
 
 下一册：[03 接口设计](03-api-design.md)。

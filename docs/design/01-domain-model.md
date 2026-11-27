@@ -199,6 +199,12 @@ Porch OS 只提供**通用多店经营底座**，不内置任何行业专属规�
 - `ShiftTemplate` 1:N `Staff`，`Staff.shift_template` 可空且最多一个，重新分配即替换；复合外键 `(shop_id, shift_template_id)` 禁止跨店。
 - 班次模板不是调度状态、分类、资质、权限或打卡记录；不参与金额与派单。详细契约见 [17 分册](17-staff-shift-templates.md)。
 
+## 12. ADR-0026 增补：工号可编辑与别名
+
+- `Staff.code` 仍是店内业务键（`uq_staff_shop_code`），从建档后不可变改为可在 `PATCH /staff/{staffId}` 中编辑；`public_id` 与内部 `id` 始终不可变，外键、订单明细快照与审计历史继续指向同一人。
+- 新增 `Staff.alias`（可选、非唯一、0–60 字符）：只作展示与检索的辅助标签，不参与身份识别、授权、资质、分类、班次、计价或报表分组；主名称与订单快照仍取 `display_name`。
+- 工号重复由 DB 唯一约束兜底并映射为 `409 STAFF_CODE_CONFLICT`；别名不做唯一性约束，重名合法。
+
 ---
 
 下一册：[02 数据库设计](02-database-design.md) 把这些不变量落成表、索引与唯一约束。
