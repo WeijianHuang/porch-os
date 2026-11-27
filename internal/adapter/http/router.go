@@ -98,6 +98,13 @@ func NewRouter(store *postgres.Store, cfg config.Config) *gin.Engine {
 			one.GET("/staff-categories", h.ListStaffCategories)
 			one.POST("/staff-categories", h.CreateStaffCategory)
 			one.PATCH("/staff-categories/:categoryId", h.UpdateStaffCategory)
+			// Shift templates (ADR-0025): shop-scoped time templates, one per
+			// staff member. Distinct from the order-domain /shifts instances.
+			one.GET("/shift-templates", h.ListShiftTemplates)
+			one.POST("/shift-templates", h.CreateShiftTemplate)
+			one.PATCH("/shift-templates/:templateId", h.UpdateShiftTemplate)
+			one.DELETE("/shift-templates/:templateId", h.DeleteShiftTemplate)
+			one.PUT("/shift-templates/:templateId/staff", h.AssignShiftTemplateStaff)
 			// GET /staff carries state + memberships for the staff wall.
 			one.GET("/staff", h.ListStaffSummaries)
 			one.POST("/staff", h.CreateStaff)

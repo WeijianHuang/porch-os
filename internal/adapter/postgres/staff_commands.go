@@ -33,23 +33,33 @@ const staffSummarySelect = `
 	SELECT st.public_id::text, st.code, st.display_name, st.status, st.duty_status,
 	       st.version, st.created_at, st.updated_at, st.id,
 	       st.executor_state, st.stop_rotation, COALESCE(pq.public_id::text,''),
-	       sc.public_id::text, sc.code, sc.name
+	       sc.public_id::text, sc.code, sc.name,
+	       stpl.public_id::text, stpl.name, to_char(stpl.start_time,'HH24:MI'), to_char(stpl.end_time,'HH24:MI')
 	FROM staff st
 	LEFT JOIN queues pq ON pq.id = st.primary_queue_id AND pq.shop_id = st.shop_id
-	LEFT JOIN staff_categories sc ON sc.id = st.category_id AND sc.shop_id = st.shop_id`
+	LEFT JOIN staff_categories sc ON sc.id = st.category_id AND sc.shop_id = st.shop_id
+	LEFT JOIN shift_templates stpl ON stpl.id = st.shift_template_id AND stpl.shop_id = st.shop_id`
 
 func scanStaffSummary(row pgx.Row) (StaffSummary, error) {
 	var v StaffSummary
 	var catPub, catCode, catName *string
+	var shiftPub, shiftName, shiftStart, shiftEnd *string
 	err := row.Scan(&v.PublicID, &v.Code, &v.DisplayName, &v.Status, &v.DutyStatus,
 		&v.Version, &v.CreatedAt, &v.UpdatedAt, &v.ID,
 		&v.State, &v.StopRotation, &v.PrimaryQueueID,
-		&catPub, &catCode, &catName)
+		&catPub, &catCode, &catName,
+		&shiftPub, &shiftName, &shiftStart, &shiftEnd)
 	v.CreatedAt, v.UpdatedAt = utc(v.CreatedAt), utc(v.UpdatedAt)
 	v.Queues = []queue.StaffQueueRef{}
 	v.ServiceItemIDs = []string{}
 	if catPub != nil && catCode != nil && catName != nil {
 		v.Category = &StaffCategoryRef{PublicID: *catPub, Code: *catCode, Name: *catName}
+	}
+	if shiftPub != nil && shiftName != nil && shiftStart != nil && shiftEnd != nil {
+		v.ShiftTemplate = &ShiftTemplateRef{
+			PublicID: *shiftPub, Name: *shiftName,
+			StartTime: *shiftStart, EndTime: *shiftEnd,
+		}
 	}
 	return v, err
 }

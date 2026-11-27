@@ -32,7 +32,9 @@ type Staff struct {
 	CreatedAt   time.Time         `json:"created_at"`
 	UpdatedAt   time.Time         `json:"updated_at"`
 	Category    *StaffCategoryRef `json:"category"`
-	ID          int64             `json:"-"`
+	// ADR-0025: at most one reusable shift template per staff member.
+	ShiftTemplate *ShiftTemplateRef `json:"shift_template"`
+	ID            int64             `json:"-"`
 }
 
 const queueCols = "public_id::text, seq, name, status, version, created_at, updated_at, id"

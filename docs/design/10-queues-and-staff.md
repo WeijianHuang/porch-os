@@ -159,4 +159,8 @@ CREATE INDEX idx_queue_staff_shop_staff ON queue_staff (shop_id, staff_id, queue
 
 `staff_categories` 是店内分类定义（`shop_id` + `code` / `name` 店内唯一），`staff.category_id` 为可空标量外键，一人最多一个分类；复合外键 `(shop_id, category_id)` 在数据库层禁止跨店绑定。分类只用于开单选人筛选与卡片展示，不授予服务能力、不参与 RBAC、不驱动派单；能力仍看 `staff_service_items`（ADR-0023），状态仍看 `duty_status` / `executor_state`（ADR-0010 / 0012 / 0015）。`GET/POST/PATCH /staff-categories` 用 `queue.read` / `queue.write`，写带幂等键与审计；`PATCH /staff/{staffId}` 增 `category_public_id` 可清空；`GET /staff` 与详情增 `category` 投影。停用分类只阻止新绑定，不回写已有服务员。
 
+## 10. ADR-0025 增补：班次模板
+
+`shift_templates` 是店内可复用时间模板（`shop_id` + `name` 店内唯一）。`staff.shift_template_id` 为可空标量外键，一人最多一班，复合外键 `(shop_id, shift_template_id)` 禁止跨店；一个班次可有多名成员。分配端点 `PUT /shift-templates/{id}/staff` 全量替换，`GET /staff` 与详情增量返回 `shift_template`。班次不是调度状态 / 分类 / 资质 / 权限，不驱动派单、不改金额、不产生打卡记录；与订单域营业班次实例 `shifts` 分离。完整模型与流程见 [17 分册](17-staff-shift-templates.md)。
+
 返回 [00 总览](00-overview.md) 查看完整分册地图与已关闭的 OQ / NQ 清单。

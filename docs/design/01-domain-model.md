@@ -193,6 +193,12 @@ Porch OS 只提供**通用多店经营底座**，不内置任何行业专属规�
 - `CatalogItem.category` 可空，指向全局 `catalog_categories`（A 类），只用于开单选人弹窗分组；不改变 `type` / `duration_minutes` / 价格派生。
 - 不变量增补：任何服务人员都不能挂两个分类；跨店分类赋值必须被复合外键拒绝；停用的分类不可新绑定，但已绑定关系保留。
 
+## 11. ADR-0025 增补：班次模板
+
+- `ShiftTemplate` 是店内 B 类值对象（`shop_id`），保存每日复用的 `name` / `start_time` / `end_time` / `check_in_lead_minutes` / `next_day_flag` / `sort_order`；与订单域 `shifts` 的营业班次实例完全不同，二者互不读写。
+- `ShiftTemplate` 1:N `Staff`，`Staff.shift_template` 可空且最多一个，重新分配即替换；复合外键 `(shop_id, shift_template_id)` 禁止跨店。
+- 班次模板不是调度状态、分类、资质、权限或打卡记录；不参与金额与派单。详细契约见 [17 分册](17-staff-shift-templates.md)。
+
 ---
 
 下一册：[02 数据库设计](02-database-design.md) 把这些不变量落成表、索引与唯一约束。

@@ -280,6 +280,13 @@ GET /exports/{id}/download ──► 流式下载
 4. 关闭后购物车仍可逐行改派；`submit` 前仍按 ADR-0023 校验服务明细执行人，缺人 `422 ORDER_LINE_STAFF_REQUIRED`、无资质 `422 STAFF_NOT_QUALIFIED`。
 5. 分类 / 状态筛选只影响展示，不写库、不授权、不改变调度状态机。
 
+## F-11 班次模板维护与分配（ADR-0025）
+
+1. 班次管理页 `GET /shift-templates` 列出本店模板；新增 / 编辑校验 `HH:MM` 与 `0..1440` 分钟，带 `version` 乐观锁。
+2. 点「分配服务人员」→ `GET /staff` 回显当前成员（按 `shift_template.public_id`）。提交 `PUT /shift-templates/{id}/staff` 为全量替换：先解绑旧成员，再把勾选项写入 `staff.shift_template_id`；已在别的班次的人员自动改派，一人一班始终成立。
+3. 删除模板先记录成员，再同事务置空引用并删除，写一条审计；人员档案与历史订单不受影响。
+4. 班次模板不触发打卡、提醒、头牌 / 排位、绩效或派单；与营业班次实例流程 F-01 的 `/shifts/open` / `/shifts/:id/close` 无关。
+
 ---
 
 返回 [00 总览](00-overview.md) 查看分册地图、已确认决议与已关闭的 OQ / NQ 清单。

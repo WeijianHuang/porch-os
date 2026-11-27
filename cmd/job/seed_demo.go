@@ -46,6 +46,19 @@ var demoStaffCategories = []struct {
 	{"SC-B", "专项服务组", 2},
 }
 
+// ADR-0025: generic, repeatable shift templates. These are definitions of
+// daily time windows, not the order-domain `shifts` business instances.
+var demoShiftTemplates = []struct {
+	name, start, end string
+	order            int
+}{
+	{"早班", "04:00", "16:00", 1},
+	{"中班", "05:00", "18:00", 2},
+	{"午班", "05:00", "17:00", 3},
+	{"晚班", "07:00", "19:00", 4},
+	{"夜班", "11:00", "20:00", 5},
+}
+
 var demoCatalogCategories = []struct {
 	code, name string
 	order      int
@@ -200,6 +213,26 @@ func seedDemo(ctx context.Context, cfg config.Config) error {
 		  AND c.code = CASE WHEN st.id % 2 = 1 THEN 'SC-A' ELSE 'SC-B' END`, shopID); err != nil {
 		return err
 	}
+	// ADR-0025: repeatable templates and a stable one-per-staff assignment.
+	shifts := 0
+	for i, t := range demoShiftTemplates {
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO shift_templates (shop_id,name,start_time,end_time,sort_order)
+			SELECT $1,$2,$3::time,$4::time,$5
+			WHERE NOT EXISTS (SELECT 1 FROM shift_templates WHERE shop_id=$1 AND name=$2)`,
+			shopID, t.name, t.start, t.end, t.order)
+		if err != nil {
+			return err
+		}
+		shifts += int(tag.RowsAffected())
+		if _, err := tx.Exec(ctx, `
+			UPDATE staff st SET shift_template_id = t.id
+			FROM shift_templates t
+			WHERE st.shop_id=$1 AND t.shop_id=$1 AND t.name=$2
+			  AND (st.id % 5) = $3`, shopID, t.name, i); err != nil {
+			return err
+		}
+	}
 	for _, it := range demoServiceItems {
 		if _, err := tx.Exec(ctx, `
 			UPDATE catalog_items i SET category_id = c.id
@@ -235,6 +268,7 @@ func seedDemo(ctx context.Context, cfg config.Config) error {
 	slog.Info("seed demo complete", "shop_id", shopID,
 		"cards_inserted", cards, "service_items_inserted", items,
 		"product_items_inserted", products,
-		"staff_categories_inserted", sc, "catalog_categories_inserted", cc)
+		"staff_categories_inserted", sc, "catalog_categories_inserted", cc,
+		"shift_templates_inserted", shifts)
 	return nil
 }

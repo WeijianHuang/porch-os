@@ -367,6 +367,19 @@
 
 新增错误码：`STAFF_CATEGORY_NOT_FOUND`（404，分类不存在或跨店）、`STAFF_CATEGORY_INACTIVE`（409，分类停用不能新绑定）；重复 `code` / `name` 与并发修改沿用既有 409。开单辅助选人不新增端点，复用 `GET /staff`、`GET /catalog-items`、`GET /catalog-categories` 一次取回后前端筛选；服务端资质校验仍按 ADR-0023 返回 `STAFF_NOT_QUALIFIED`。
 
+## 12. ADR-0025 增补：班次模板端点
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| GET | `/shops/{shopId}/shift-templates` | `queue.read` | 本店模板，按 `sort_order, name` |
+| POST | `/shift-templates` | `queue.write` | `{name,start_time,end_time,check_in_lead_minutes?,next_day_flag?,sort_order?}`，时间 `HH:MM` |
+| PATCH | `/shift-templates/{templateId}` | `queue.write` | 同字段增量 + `version` 乐观锁 |
+| DELETE | `/shift-templates/{templateId}` | `queue.write` | 同事务解绑成员后删除 |
+| PUT | `/shift-templates/{templateId}/staff` | `queue.write` | `{staff_public_ids:string[],version}` 全量替换成员 |
+| GET | `/staff` / `/staff/{staffId}` | `queue.read` | 增量 `shift_template: {public_id,name,start_time,end_time} \| null` |
+
+新增错误码 `SHIFT_TEMPLATE_NOT_FOUND`（404，模板不存在或跨店）；时间 / 分钟数非法沿用 `INVALID_ARGUMENT`（400），重名与版本冲突沿用 409。所有写端点带 `Idempotency-Key`，与营业班次实例端点 `/shifts/current`、`/shifts/open`、`/shifts/:id/close` 完全分开。详见 [17 分册](17-staff-shift-templates.md) §3。
+
 ---
 
 下一册：[04 应用架构](04-application-architecture.md)。

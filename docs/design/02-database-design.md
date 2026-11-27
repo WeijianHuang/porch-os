@@ -580,6 +580,12 @@ $$;
 - `catalog_items` 增可空 `category_id REFERENCES catalog_categories(id)`，部分索引 `(category_id) WHERE category_id IS NOT NULL`；只用于选人弹窗分组，不扩张目录分类维护面。
 - `Down`：先 drop 两个新索引与 `staff.category_id` 约束 / 列、`catalog_items.category_id` 列，再 drop `staff_categories` 表。存量数据两列均为 NULL，无需回填。
 
+## 10. ADR-0025 增补：迁移 `00014`（schema 13 → 14）
+
+- 新增 `shift_templates`：`id` / `public_id` / `shop_id` / `name`（店内唯一）/ `sort_order` / `start_time` / `end_time`（`time`）/ `check_in_lead_minutes`（`0..1440`）/ `next_day_flag` / `created_at` / `updated_at` / `version`；索引 `(shop_id, sort_order, name)`。它与订单域 `shifts`（营业班次实例）分开存储。
+- `staff` 增可空 `shift_template_id`，`FOREIGN KEY (shop_id, shift_template_id) REFERENCES shift_templates (shop_id, id)`，部分索引 `(shop_id, shift_template_id) WHERE shift_template_id IS NOT NULL`；标量列天然保证一人一班。
+- `Down`：先 drop staff 侧索引、约束与列，再 drop 模板表；存量列为 NULL，无需回填。完整 DDL 见 [17 分册](17-staff-shift-templates.md) §2。
+
 ---
 
 下一册：[03 接口设计](03-api-design.md)。
