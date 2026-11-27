@@ -26,7 +26,10 @@ type Staff struct {
 	PublicID string `json:"public_id"`
 	Code     string `json:"code"`
 	// ADR-0026: optional display/search label, never an identity or snapshot.
-	Alias       string            `json:"alias"`
+	Alias string `json:"alias"`
+	// ADR-0027: profile-only attributes; never used for identity, auth or pricing.
+	Gender      string            `json:"gender"`
+	Phone       string            `json:"phone"`
 	DisplayName string            `json:"display_name"`
 	Status      string            `json:"status"`
 	DutyStatus  string            `json:"duty_status"`
@@ -40,7 +43,7 @@ type Staff struct {
 }
 
 const queueCols = "public_id::text, seq, name, status, version, created_at, updated_at, id"
-const staffCols = "public_id::text, code, alias, display_name, status, duty_status, version, created_at, updated_at, id"
+const staffCols = "public_id::text, code, alias, gender, phone, display_name, status, duty_status, version, created_at, updated_at, id"
 
 func scanQueue(row pgx.Row) (Queue, error) {
 	var v Queue
@@ -51,7 +54,7 @@ func scanQueue(row pgx.Row) (Queue, error) {
 
 func scanStaff(row pgx.Row) (Staff, error) {
 	var v Staff
-	err := row.Scan(&v.PublicID, &v.Code, &v.Alias, &v.DisplayName, &v.Status, &v.DutyStatus, &v.Version, &v.CreatedAt, &v.UpdatedAt, &v.ID)
+	err := row.Scan(&v.PublicID, &v.Code, &v.Alias, &v.Gender, &v.Phone, &v.DisplayName, &v.Status, &v.DutyStatus, &v.Version, &v.CreatedAt, &v.UpdatedAt, &v.ID)
 	v.CreatedAt, v.UpdatedAt = utc(v.CreatedAt), utc(v.UpdatedAt)
 	return v, err
 }
@@ -130,11 +133,11 @@ func (s *Store) StaffByPublicID(ctx context.Context, q DBTX, shopID int64, publi
 		`SELECT `+staffCols+` FROM staff WHERE shop_id=$1 AND public_id::text=$2`, shopID, publicID))
 }
 
-func (s *Store) CreateStaff(ctx context.Context, tx pgx.Tx, shopID int64, code, displayName, alias string) (Staff, error) {
+func (s *Store) CreateStaff(ctx context.Context, tx pgx.Tx, shopID int64, code, displayName, alias, gender, phone string) (Staff, error) {
 	var id int64
 	if err := tx.QueryRow(ctx,
-		`INSERT INTO staff (shop_id,code,display_name,alias) VALUES ($1,$2,$3,$4) RETURNING id`,
-		shopID, code, displayName, alias).Scan(&id); err != nil {
+		`INSERT INTO staff (shop_id,code,display_name,alias,gender,phone) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+		shopID, code, displayName, alias, gender, phone).Scan(&id); err != nil {
 		return Staff{}, err
 	}
 	return scanStaff(tx.QueryRow(ctx, `SELECT `+staffCols+` FROM staff WHERE id=$1`, id))
@@ -142,13 +145,14 @@ func (s *Store) CreateStaff(ctx context.Context, tx pgx.Tx, shopID int64, code, 
 
 func (s *Store) UpdateStaff(
 	ctx context.Context, tx pgx.Tx, shopID, id int64,
-	code, alias, displayName, status, dutyStatus string, categoryID *int64, version int,
+	code, alias, displayName, status, dutyStatus, gender, phone string, categoryID *int64, version int,
 ) (Staff, error) {
 	tag, err := tx.Exec(ctx, `
-		UPDATE staff SET code=$3, alias=$4, display_name=$5, status=$6, duty_status=$7, category_id=$8,
+		UPDATE staff SET code=$3, alias=$4, display_name=$5, status=$6, duty_status=$7,
+		  gender=$8, phone=$9, category_id=$10,
 		  version=version+1, updated_at=now()
-		WHERE id=$1 AND shop_id=$2 AND version=$9`,
-		id, shopID, code, alias, displayName, status, dutyStatus, categoryID, version)
+		WHERE id=$1 AND shop_id=$2 AND version=$11`,
+		id, shopID, code, alias, displayName, status, dutyStatus, gender, phone, categoryID, version)
 	if err != nil {
 		return Staff{}, err
 	}

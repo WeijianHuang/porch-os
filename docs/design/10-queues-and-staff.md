@@ -167,4 +167,8 @@ CREATE INDEX idx_queue_staff_shop_staff ON queue_staff (shop_id, staff_id, queue
 
 `staff.code` 仍是店内唯一业务键，但可在 `PATCH /staff/{staffId}` 中编辑；`public_id` 不可变，历史引用与订单快照不回写。新增 `staff.alias` 是可选、非唯一的展示标签（0–60 字符），只用于卡片/详情展示与列表搜索，不参与授权、资质、分类、班次、计价或报表分组；主名称与快照仍取 `display_name`。重复工号由 `(shop_id, code)` 唯一约束拒绝并映射 `409 STAFF_CODE_CONFLICT`。
 
+## 12. ADR-0027 增补：性别与手机号
+
+`staff.gender` 是三值档案属性（`unknown` / `male` / `female`，默认 `unknown`），`staff.phone` 是可选联系方式（空串表示未填、非唯一、不建索引）。两者都只用于服务人员资料展示，不参与授权、资质、分类、班次、调度、计价或报表分组；本期不接短信、不做脱敏、不加入列表搜索。`POST /staff` / `PATCH /staff/{staffId}` 接受两个可选字段，`GET /staff` 与详情增量返回投影；非法值映射 `400 INVALID_ARGUMENT`。前端编辑弹窗按「基本信息 / 联系信息 / 任职设置」三区两列重排，操作行与调度菜单不变。
+
 返回 [00 总览](00-overview.md) 查看完整分册地图与已关闭的 OQ / NQ 清单。

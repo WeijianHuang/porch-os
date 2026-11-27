@@ -88,6 +88,44 @@ func ValidateAlias(alias string) error {
 	return nil
 }
 
+// ValidateGender checks the three-valued staff gender label (ADR-0027).
+// 'unknown' is the explicit sentinel for "not provided", never NULL.
+func ValidateGender(gender string) error {
+	switch gender {
+	case "unknown", "male", "female":
+		return nil
+	default:
+		return ErrBadGender
+	}
+}
+
+// ValidatePhone checks the optional staff contact phone (ADR-0027). Empty or
+// whitespace-only input is valid. Otherwise it accepts 6-15 digits with an
+// optional leading '+' and spaces, '-' or parentheses as separators; no
+// region-specific number plan is assumed.
+func ValidatePhone(phone string) error {
+	value := strings.TrimSpace(phone)
+	if value == "" {
+		return nil
+	}
+	digits, plus := 0, false
+	for _, r := range value {
+		switch {
+		case r >= '0' && r <= '9':
+			digits++
+		case r == '+' && !plus && digits == 0:
+			plus = true
+		case r == ' ' || r == '-' || r == '(' || r == ')':
+		default:
+			return ErrBadPhone
+		}
+	}
+	if digits < 6 || digits > 15 {
+		return ErrBadPhone
+	}
+	return nil
+}
+
 // ValidateDuty checks the current duty state against the employment status.
 // A disabled staff member cannot be on duty (ADR-0010 §1).
 func ValidateDuty(status, duty string) error {
@@ -211,6 +249,8 @@ const (
 	ErrBadName      validationError = "name must not be blank"
 	ErrBadCode      validationError = "code must not be blank"
 	ErrBadAlias     validationError = "alias must be at most 60 characters"
+	ErrBadGender    validationError = "gender must be unknown, male or female"
+	ErrBadPhone     validationError = "phone must contain 6 to 15 digits"
 	ErrBadStatus    validationError = "status must be active or inactive"
 	ErrBadDuty      validationError = "duty_status must be on or off"
 	ErrDutyConflict validationError = "inactive staff cannot be on duty"

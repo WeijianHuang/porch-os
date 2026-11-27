@@ -189,6 +189,8 @@ func (h *Handler) CreateStaff(c *gin.Context) {
 		Code        string `json:"code"`
 		DisplayName string `json:"display_name"`
 		Alias       string `json:"alias"`
+		Gender      string `json:"gender"`
+		Phone       string `json:"phone"`
 	}
 	if err := decode(c, &req); err != nil {
 		badRequest(c, err)
@@ -202,10 +204,24 @@ func (h *Handler) CreateStaff(c *gin.Context) {
 		badRequest(c, err)
 		return
 	}
+	// ADR-0027: omitted gender means 'unknown'; phone normalises to ''.
+	gender := req.Gender
+	if gender == "" {
+		gender = "unknown"
+	}
+	if err := qdomain.ValidateGender(gender); err != nil {
+		badRequest(c, err)
+		return
+	}
+	phone := strings.TrimSpace(req.Phone)
+	if err := qdomain.ValidatePhone(phone); err != nil {
+		badRequest(c, err)
+		return
+	}
 	shopID := Current(c).ShopID
 	alias := strings.TrimSpace(req.Alias)
 	h.runWrite(c, func(tx pgx.Tx) (int, any, error) {
-		v, err := h.Store.CreateStaff(c.Request.Context(), tx, shopID, req.Code, req.DisplayName, alias)
+		v, err := h.Store.CreateStaff(c.Request.Context(), tx, shopID, req.Code, req.DisplayName, alias, gender, phone)
 		if err != nil {
 			return 0, nil, pgErr(err)
 		}
@@ -273,6 +289,8 @@ func (h *Handler) UpdateStaff(c *gin.Context) {
 		DisplayName      *string `json:"display_name"`
 		Status           *string `json:"status"`
 		DutyStatus       *string `json:"duty_status"`
+		Gender           *string `json:"gender"`
+		Phone            *string `json:"phone"`
 		CategoryPublicID *string `json:"category_public_id"`
 		Version          int     `json:"version"`
 	}
@@ -281,13 +299,14 @@ func (h *Handler) UpdateStaff(c *gin.Context) {
 		return
 	}
 	if req.Code == nil && req.Alias == nil && req.DisplayName == nil && req.Status == nil &&
-		req.DutyStatus == nil && req.CategoryPublicID == nil {
+		req.DutyStatus == nil && req.Gender == nil && req.Phone == nil && req.CategoryPublicID == nil {
 		badRequest(c, errors.New("at least one field is required"))
 		return
 	}
 	// ADR-0026: code stays shop-unique via the DB constraint; alias is a
 	// display-only label and normalises whitespace to an empty string.
 	code, alias, name, status, duty := existing.Code, existing.Alias, existing.DisplayName, existing.Status, existing.DutyStatus
+	gender, phone := existing.Gender, existing.Phone
 	if req.Code != nil {
 		code = strings.TrimSpace(*req.Code)
 	}
@@ -301,6 +320,22 @@ func (h *Handler) UpdateStaff(c *gin.Context) {
 	if req.Alias != nil {
 		alias = strings.TrimSpace(*req.Alias)
 		if err := qdomain.ValidateAlias(alias); err != nil {
+			badRequest(c, err)
+			return
+		}
+	}
+	// ADR-0027: PATCH omissions keep the existing value. To clear gender the
+	// caller sends 'unknown' explicitly; an empty string is invalid.
+	if req.Gender != nil {
+		gender = *req.Gender
+		if err := qdomain.ValidateGender(gender); err != nil {
+			badRequest(c, err)
+			return
+		}
+	}
+	if req.Phone != nil {
+		phone = strings.TrimSpace(*req.Phone)
+		if err := qdomain.ValidatePhone(phone); err != nil {
 			badRequest(c, err)
 			return
 		}
@@ -349,7 +384,7 @@ func (h *Handler) UpdateStaff(c *gin.Context) {
 		}
 	}
 	h.runWrite(c, func(tx pgx.Tx) (int, any, error) {
-		v, err := h.Store.UpdateStaff(c.Request.Context(), tx, shopID, id, code, alias, name, status, duty, categoryID, req.Version)
+		v, err := h.Store.UpdateStaff(c.Request.Context(), tx, shopID, id, code, alias, name, status, duty, gender, phone, categoryID, req.Version)
 		if postgres.IsNoRows(err) {
 			return 0, nil, apierrors.New("VERSION_CONFLICT", "并发冲突，请重读后重试")
 		}

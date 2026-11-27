@@ -391,6 +391,17 @@
 - `code` 在本店重复时返回 `409 STAFF_CODE_CONFLICT`（`uq_staff_shop_code` 唯一冲突精确映射）；别名超长 / 工号空白返回 `400 INVALID_ARGUMENT`；版本过期仍是 `409 VERSION_CONFLICT`。
 - 工号编辑不改 `public_id`、不回写订单明细快照；列表排序仍是 `display_name, code`。权限与幂等键沿用既有写端点契约。
 
+## 10. ADR-0027 增补：性别与手机号
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| POST | `/shops/{shopId}/staff` | `queue.write` | 请求体增可选 `gender` / `phone`；省略分别为 `unknown` / `''` |
+| PATCH | `/staff/{staffId}` | `queue.write` | 增量接受 `gender` / `phone` + `version`；省略保持原值 |
+| GET | `/staff` / `/staff/{staffId}` | `queue.read` | `Staff` 投影增量返回 `gender: string` / `phone: string` |
+
+- 非法性别、非法手机号字符或数字位数越界均返回 `400 INVALID_ARGUMENT`（`ErrBadGender` / `ErrBadPhone`），DB CHECK 只作最后防线。
+- 两个字段不新增端点、不新增错误码、不影响 `public_id` 与订单快照；权限、幂等键与乐观锁沿用既有写端点契约。
+
 ---
 
 下一册：[04 应用架构](04-application-architecture.md)。

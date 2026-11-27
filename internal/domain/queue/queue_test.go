@@ -48,6 +48,32 @@ func TestValidateAlias(t *testing.T) {
 	}
 }
 
+func TestValidateGender(t *testing.T) {
+	for _, value := range []string{"unknown", "male", "female"} {
+		if err := ValidateGender(value); err != nil {
+			t.Fatalf("gender %q rejected: %v", value, err)
+		}
+	}
+	for _, value := range []string{"", "MALE", "other"} {
+		if err := ValidateGender(value); err != ErrBadGender {
+			t.Fatalf("gender %q: got %v want ErrBadGender", value, err)
+		}
+	}
+}
+
+func TestValidatePhone(t *testing.T) {
+	for _, value := range []string{"", "   ", "13800138000", "+86 138 0013 8000", "(010) 12345678", "123456"} {
+		if err := ValidatePhone(value); err != nil {
+			t.Fatalf("phone %q rejected: %v", value, err)
+		}
+	}
+	for _, value := range []string{"abc", "1380013800a", "12345", strings.Repeat("1", 16), "+8613800138000+1", "1+234567"} {
+		if err := ValidatePhone(value); err != ErrBadPhone {
+			t.Fatalf("phone %q: got %v want ErrBadPhone", value, err)
+		}
+	}
+}
+
 func TestValidateDuty(t *testing.T) {
 	if err := ValidateDuty("active", "on"); err != nil {
 		t.Fatalf("active on rejected: %v", err)

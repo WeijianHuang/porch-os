@@ -30,7 +30,7 @@ type StaffSummary struct {
 }
 
 const staffSummarySelect = `
-	SELECT st.public_id::text, st.code, st.alias, st.display_name, st.status, st.duty_status,
+	SELECT st.public_id::text, st.code, st.alias, st.gender, st.phone, st.display_name, st.status, st.duty_status,
 	       st.version, st.created_at, st.updated_at, st.id,
 	       st.executor_state, st.stop_rotation, COALESCE(pq.public_id::text,''),
 	       sc.public_id::text, sc.code, sc.name,
@@ -44,7 +44,7 @@ func scanStaffSummary(row pgx.Row) (StaffSummary, error) {
 	var v StaffSummary
 	var catPub, catCode, catName *string
 	var shiftPub, shiftName, shiftStart, shiftEnd *string
-	err := row.Scan(&v.PublicID, &v.Code, &v.Alias, &v.DisplayName, &v.Status, &v.DutyStatus,
+	err := row.Scan(&v.PublicID, &v.Code, &v.Alias, &v.Gender, &v.Phone, &v.DisplayName, &v.Status, &v.DutyStatus,
 		&v.Version, &v.CreatedAt, &v.UpdatedAt, &v.ID,
 		&v.State, &v.StopRotation, &v.PrimaryQueueID,
 		&catPub, &catCode, &catName,

@@ -592,6 +592,12 @@ $$;
 - `code` 列与 `uq_staff_shop_code (shop_id, code)` 约束不变；编辑工号只改文本，`public_id` 稳定。
 - `Down`：先 drop `ck_staff_alias`，再 drop `alias` 列，无需数据回填。
 
+## 12. ADR-0027 增补：迁移 `00016`（schema 15 → 16）
+
+- `staff` 增 `gender text NOT NULL DEFAULT 'unknown'`、`phone text NOT NULL DEFAULT ''`，以及 `ck_staff_gender CHECK (gender IN ('unknown','male','female'))`、`ck_staff_phone CHECK (character_length(btrim(phone)) <= 32)`。
+- 不建 PG ENUM、不加唯一约束、不加索引；存量行自动落到 `unknown` 与空串，无回填。
+- `Down`：先 drop 两条 CHECK，再 drop 两列。
+
 ---
 
 下一册：[03 接口设计](03-api-design.md)。

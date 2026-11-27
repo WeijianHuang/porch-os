@@ -149,7 +149,7 @@ CHANGELOG.md        变更记录
 Prerequisites: Go 1.25+ (matching `go.mod`) and a running PostgreSQL 18.7 (`docker compose up -d db`).
 
 ```bash
-cp .env.example .env          # set DATABASE_URL / JWT_SECRET / EXPECTED_SCHEMA_VERSION=15
+cp .env.example .env          # set DATABASE_URL / JWT_SECRET / EXPECTED_SCHEMA_VERSION=16
 go run ./cmd/job migrate      # the ONLY process allowed to change the schema
 SEED_LOGIN=admin SEED_PASSWORD=<local-password> go run ./cmd/job seed-user
 go run ./cmd/api              # /health and /ready on PORT (default 8080)
@@ -202,6 +202,7 @@ nor `worker` runs migrations at startup.
 | `docs/decisions/0024-staff-categories-and-assisted-order-entry.md` | 店内服务人员分类（`staff_categories` + `staff.category_id`，一人最多一类）与目录项分组（`catalog_items.category_id`）；开单弹窗「添加服务员」按分类 / 状态选人后连续添加服务项；第十六次受控扩展，迁移 `00013`，schema 13 |
 | `docs/decisions/0025-staff-shift-templates.md` | 店内班次模板（`shift_templates` + `staff.shift_template_id`，一人最多一班）与全量分配 / 删除解绑；与订单域营业班次实例 `shifts` 分离；第十七次受控扩展，迁移 `00014`，schema 14，设计落 `17` 分册 |
 | `docs/decisions/0026-editable-staff-code-and-alias.md` | 服务人员工号可编辑（`staff.code` 店内唯一不变，新增 `409 STAFF_CODE_CONFLICT`）与可选别名 `staff.alias`（展示 / 检索标签，非唯一、不授权）；第十八次受控扩展，迁移 `00015`，schema 15 |
+| `docs/decisions/0027-staff-gender-and-phone.md` | 服务人员性别（`staff.gender` 三值哨兵 + CHECK）与可选手机号 `staff.phone`（非唯一、不建索引、不接短信）；编辑弹窗三区两列重排；第十九次受控扩展，迁移 `00016`，schema 16 |
 | `docs/decisions/0008-design-freeze-and-nq-resolutions.md` | NQ-01–16 全部决议、DP-01–07 接受、详细设计冻结、R1 范围与验收、Docker 2+2 / Go Job / 连接池 / 审计 / 容量基线 |
 | `CONTRIBUTING.md` | 分支、提交与 PR 约定 |
 | `CHANGELOG.md` | 变更记录 |
