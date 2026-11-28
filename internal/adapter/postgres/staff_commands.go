@@ -25,6 +25,9 @@ type StaffSummary struct {
 	// ADR-0017: current card and the reserved order-domain remaining minutes.
 	IDCard                  *CardRef `json:"id_card"`
 	ServiceRemainingMinutes *int     `json:"service_remaining_minutes"`
+	// ADR-0028: room of the latest unsettled order this staff executes; null
+	// when no such order exists. Derived at read time, never written back.
+	CurrentRoom *OrderRoomRef `json:"current_room"`
 	// ADR-0023: qualified service catalog items (public_ids).
 	ServiceItemIDs []string `json:"service_item_ids"`
 }
@@ -62,6 +65,38 @@ func scanStaffSummary(row pgx.Row) (StaffSummary, error) {
 		}
 	}
 	return v, err
+}
+
+// CurrentRoomsByStaff returns the room of each staff member's latest unsettled
+// order (ADR-0028), keyed by staff public id. DISTINCT ON makes the choice
+// deterministic when a member appears on more than one active order.
+func CurrentRoomsByStaff(ctx context.Context, q DBTX, shopID int64) (map[string]OrderRoomRef, error) {
+	rows, err := q.Query(ctx, `
+		SELECT DISTINCT ON (ol.staff_id)
+		       st.public_id::text, r.public_id::text, r.floor, r.code, r.name
+		FROM order_lines ol
+		JOIN orders o ON o.shop_id = ol.shop_id AND o.id = ol.order_id
+		JOIN rooms r ON r.shop_id = o.shop_id AND r.id = o.room_id
+		JOIN staff st ON st.shop_id = ol.shop_id AND st.id = ol.staff_id
+		WHERE ol.shop_id = $1
+		  AND ol.staff_id IS NOT NULL
+		  AND o.status IN ('draft','open','pending_payment')
+		  AND o.room_id IS NOT NULL
+		ORDER BY ol.staff_id, o.created_at DESC, o.id DESC`, shopID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]OrderRoomRef)
+	for rows.Next() {
+		var staffPub, roomPub, code, name string
+		var floor int
+		if err := rows.Scan(&staffPub, &roomPub, &floor, &code, &name); err != nil {
+			return nil, err
+		}
+		out[staffPub] = OrderRoomRef{PublicID: roomPub, Floor: floor, Code: code, Name: name}
+	}
+	return out, rows.Err()
 }
 
 // ListStaffSummaries returns every staff member of the shop with state and
@@ -108,6 +143,15 @@ func (s *Store) ListStaffSummaries(ctx context.Context, q DBTX, shopID int64) ([
 			out[i].IDCard = &ref
 		}
 	}
+	currentRooms, err := CurrentRoomsByStaff(ctx, q, shopID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if ref, ok := currentRooms[out[i].PublicID]; ok {
+			out[i].CurrentRoom = &ref
+		}
+	}
 	qualified, err := s.ServiceItemsByStaff(ctx, q, shopID)
 	if err != nil {
 		return nil, err
@@ -142,6 +186,13 @@ func (s *Store) StaffSummaryByPublicID(ctx context.Context, q DBTX, shopID int64
 		return StaffSummary{}, err
 	}
 	v.ServiceItemIDs = qualified
+	currentRooms, err := CurrentRoomsByStaff(ctx, q, shopID)
+	if err != nil {
+		return StaffSummary{}, err
+	}
+	if ref, ok := currentRooms[v.PublicID]; ok {
+		v.CurrentRoom = &ref
+	}
 	return v, nil
 }
 
